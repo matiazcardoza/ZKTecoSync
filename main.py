@@ -10,6 +10,10 @@ import argparse
 import os
 from urllib.parse import urljoin
 
+# Importaciones para Flask
+from flask import Flask, jsonify
+from flask_cors import CORS
+
 try:
     from zk import ZK
     ZK_AVAILABLE = True
@@ -27,6 +31,10 @@ class ZKTecoApp:
         self.connection = None
         self.device = None
         self.is_connected = False
+        
+        # Variables para el servidor Flask
+        self.flask_app = None
+        self.flask_thread = None
 
         # OPTIMIZADO: Parsing rápido de parámetros
         self.system_params = self.parse_system_params_fast()
@@ -35,11 +43,79 @@ class ZKTecoApp:
         self.device_info = None
         self.current_device_id = None
         
+        # Iniciar servidor Flask antes de la UI
+        self.init_flask_server()
+        
         self.setup_ui()
         
         if not ZK_AVAILABLE:
             self.log_text.insert(tk.END, "ADVERTENCIA: Librería 'pyzk' no encontrada.\n")
             self.log_text.insert(tk.END, "Instalar con: pip install pyzk\n\n")
+
+    def init_flask_server(self):
+        """Inicializar servidor Flask para verificación remota"""
+        try:
+            self.flask_app = Flask(__name__)
+            CORS(self.flask_app)  # Permitir CORS para peticiones desde el frontend
+            
+            # Ruta para verificar estado de la aplicación
+            @self.flask_app.route('/estado', methods=['GET'])
+            def estado():
+                return jsonify({
+                    'status': 'zkteco activo',
+                    'instalado': True,
+                    'version': '1.1',
+                    'conectado': self.is_connected,
+                    'timestamp': datetime.now().isoformat()
+                })
+            
+            @self.flask_app.route('/info', methods=['GET'])
+            def info():
+                device_info = {}
+                if self.system_params:
+                    device_info = {
+                        'dispositivo': self.system_params.get('name', 'N/A'),
+                        'ip': self.system_params.get('ip_address', 'N/A'),
+                        'puerto': self.system_params.get('port', 'N/A')
+                    }
+                
+                return jsonify({
+                    'aplicacion': 'ZKTeco Sync',
+                    'version': '1.1',
+                    'estado': 'activo',
+                    'dispositivo_configurado': bool(self.system_params),
+                    'dispositivo_conectado': self.is_connected,
+                    'device_info': device_info
+                })
+            
+            # Ruta para verificar conectividad con dispositivo
+            @self.flask_app.route('/ping-device', methods=['GET'])
+            def ping_device():
+                return jsonify({
+                    'dispositivo_conectado': self.is_connected,
+                    'puede_sincronizar': self.is_connected and bool(self.system_params)
+                })
+            
+            def iniciar_servidor():
+                try:
+                    self.flask_app.run(
+                        port=3322, 
+                        host='127.0.0.1', 
+                        debug=False, 
+                        use_reloader=False,
+                        threaded=True
+                    )
+                except Exception as e:
+                    print(f"Error iniciando servidor Flask: {e}")
+            
+            # Iniciar servidor en hilo separado
+            self.flask_thread = threading.Thread(target=iniciar_servidor, daemon=True)
+            self.flask_thread.start()
+            
+            print("Servidor Flask iniciado en http://127.0.0.1:3322")
+            
+        except Exception as e:
+            print(f"Error configurando servidor Flask: {e}")
 
     def parse_system_params_fast(self):
         """Parsing optimizado de parámetros del sistema"""
@@ -103,6 +179,13 @@ class ZKTecoApp:
         else:
             error_label = ttk.Label(config_frame, text="No se puede continuar sin parámetros del dispositivo", foreground='red')
             error_label.grid(row=0, column=0, columnspan=2)
+
+        # Mostrar información del servidor Flask
+        server_frame = ttk.LabelFrame(main_frame, text="Servidor de Verificación", padding="10")
+        server_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        ttk.Label(server_frame, text="Servidor activo en:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(server_frame, text="http://127.0.0.1:3322/estado", font=('Arial', 9, 'bold')).grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
 
         # Timeout
         ttk.Label(config_frame, text="Timeout (s):").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
@@ -173,10 +256,11 @@ class ZKTecoApp:
         
         # Log inicial - OPTIMIZADO
         self.log("Aplicación iniciada - Solo sincronización de asistencias")
+        self.log("Servidor Flask iniciado en puerto 3322")
         if ZK_AVAILABLE:
             self.log("Librería ZK cargada correctamente")
         else:
-            self.log("ADVERTENCIA: Instalar con 'pip install pyzk requests'")
+            self.log("ADVERTENCIA: Instalar con 'pip install pyzk requests flask flask-cors'")
         
         # Log de parámetros - SIMPLIFICADO
         if self.system_params:
