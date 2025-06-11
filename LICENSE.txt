@@ -1,0 +1,13 @@
+LICENCIA DE USO - ZKTeco Sync v1.1
+
+Este software se proporciona "tal como está" sin garantías de ningún tipo.
+
+Permitido:
+- Usar el software para fines internos de la organización
+- Realizar copias de respaldo
+
+No permitido:
+- Redistribuir o vender el software
+- Modificar o descompilar el código
+
+© 2024 - Sistema de Asistencias
