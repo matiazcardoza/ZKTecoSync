@@ -8,11 +8,13 @@ import requests
 import sys
 import argparse
 import os
+import socket
 from urllib.parse import urljoin
-
+from flask import Flask, jsonify, request
 # Importaciones para Flask
 from flask import Flask, jsonify
 from flask_cors import CORS
+
 
 try:
     from zk import ZK
@@ -35,6 +37,7 @@ class ZKTecoApp:
         # Variables para el servidor Flask
         self.flask_app = None
         self.flask_thread = None
+        self.service_running = False
 
         # OPTIMIZADO: Parsing rápido de parámetros
         self.system_params = self.parse_system_params_fast()
@@ -43,8 +46,12 @@ class ZKTecoApp:
         self.device_info = None
         self.current_device_id = None
         
-        # Iniciar servidor Flask antes de la UI
-        self.init_flask_server()
+        # Verificar si el servicio ya está ejecutándose
+        self.check_service_status()
+        
+        # Solo iniciar servidor Flask si el servicio NO está corriendo
+        if not self.service_running:
+            self.init_flask_server()
         
         self.setup_ui()
         
@@ -52,11 +59,40 @@ class ZKTecoApp:
             self.log_text.insert(tk.END, "ADVERTENCIA: Librería 'pyzk' no encontrada.\n")
             self.log_text.insert(tk.END, "Instalar con: pip install pyzk\n\n")
 
+    def check_service_status(self):
+        """Verificar si el servicio ya está ejecutándose en el puerto 3322"""
+        try:
+            # Intentar hacer una petición al servicio
+            response = requests.get('http://127.0.0.1:3322/estado', timeout=2)
+            if response.status_code == 200:
+                data = response.json()
+                # Verificar si es el servicio (no la aplicación GUI)
+                if data.get('tipo') == 'servicio_windows':
+                    self.service_running = True
+                    print("Servicio ZKTeco detectado ejecutándose")
+                    return True
+        except:
+            pass
+        
+        # También verificar si el puerto está en uso
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                result = s.connect_ex(('127.0.0.1', 3322))
+                if result == 0:
+                    self.service_running = True
+                    print("Puerto 3322 está en uso (posiblemente por el servicio)")
+                    return True
+        except:
+            pass
+        
+        self.service_running = False
+        return False
+
     def init_flask_server(self):
         """Inicializar servidor Flask para verificación remota"""
         try:
             self.flask_app = Flask(__name__)
-            CORS(self.flask_app)  # Permitir CORS para peticiones desde el frontend
+            CORS(self.flask_app)
             
             # Ruta para verificar estado de la aplicación
             @self.flask_app.route('/estado', methods=['GET'])
@@ -65,6 +101,7 @@ class ZKTecoApp:
                     'status': 'zkteco activo',
                     'instalado': True,
                     'version': '1.1',
+                    'tipo': 'aplicacion_gui',
                     'conectado': self.is_connected,
                     'timestamp': datetime.now().isoformat()
                 })
@@ -80,9 +117,10 @@ class ZKTecoApp:
                     }
                 
                 return jsonify({
-                    'aplicacion': 'ZKTeco Sync',
+                    'aplicacion': 'ZKTeco Sync GUI',
                     'version': '1.1',
                     'estado': 'activo',
+                    'tipo': 'aplicacion_gui',
                     'dispositivo_configurado': bool(self.system_params),
                     'dispositivo_conectado': self.is_connected,
                     'device_info': device_info
@@ -96,8 +134,18 @@ class ZKTecoApp:
                     'puede_sincronizar': self.is_connected and bool(self.system_params)
                 })
             
+            # NUEVA RUTA: Cerrar servidor
+            @self.flask_app.route('/shutdown', methods=['POST'])
+            def shutdown():
+                func = request.environ.get('werkzeug.server.shutdown')
+                if func is None:
+                    raise RuntimeError('Not running with the Werkzeug Server')
+                func()
+                return jsonify({'message': 'Server shutting down...'})
+            
             def iniciar_servidor():
                 try:
+                    # CAMBIO CLAVE: daemon=False para que persista
                     self.flask_app.run(
                         port=3322, 
                         host='127.0.0.1', 
@@ -108,8 +156,8 @@ class ZKTecoApp:
                 except Exception as e:
                     print(f"Error iniciando servidor Flask: {e}")
             
-            # Iniciar servidor en hilo separado
-            self.flask_thread = threading.Thread(target=iniciar_servidor, daemon=True)
+            # CAMBIO CLAVE: daemon=False
+            self.flask_thread = threading.Thread(target=iniciar_servidor, daemon=False)
             self.flask_thread.start()
             
             print("Servidor Flask iniciado en http://127.0.0.1:3322")
@@ -181,11 +229,19 @@ class ZKTecoApp:
             error_label.grid(row=0, column=0, columnspan=2)
 
         # Mostrar información del servidor Flask
-        server_frame = ttk.LabelFrame(main_frame, text="Servidor de Verificación", padding="10")
+        server_frame = ttk.LabelFrame(main_frame, text="Estado del Servidor", padding="10")
         server_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
-        ttk.Label(server_frame, text="Servidor activo en:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Label(server_frame, text="http://127.0.0.1:3322/estado", font=('Arial', 9, 'bold')).grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+        if self.service_running:
+            ttk.Label(server_frame, text="Estado:").grid(row=0, column=0, sticky=tk.W)
+            ttk.Label(server_frame, text="Servicio de Windows ejecutándose", font=('Arial', 9, 'bold'), foreground='green').grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+            ttk.Label(server_frame, text="URL:").grid(row=1, column=0, sticky=tk.W)
+            ttk.Label(server_frame, text="http://127.0.0.1:3322/estado", font=('Arial', 9)).grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+        else:
+            ttk.Label(server_frame, text="Estado:").grid(row=0, column=0, sticky=tk.W)
+            ttk.Label(server_frame, text="Aplicación GUI activa", font=('Arial', 9, 'bold'), foreground='blue').grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+            ttk.Label(server_frame, text="URL:").grid(row=1, column=0, sticky=tk.W)
+            ttk.Label(server_frame, text="http://127.0.0.1:3322/estado", font=('Arial', 9)).grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
 
         # Timeout
         ttk.Label(config_frame, text="Timeout (s):").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
@@ -256,7 +312,13 @@ class ZKTecoApp:
         
         # Log inicial - OPTIMIZADO
         self.log("Aplicación iniciada - Solo sincronización de asistencias")
-        self.log("Servidor Flask iniciado en puerto 3322")
+        
+        if self.service_running:
+            self.log("NOTA: Servicio ZKTeco detectado ejecutándose")
+            self.log("La aplicación GUI funciona en modo complementario")
+        else:
+            self.log("Servidor Flask iniciado en puerto 3322")
+        
         if ZK_AVAILABLE:
             self.log("Librería ZK cargada correctamente")
         else:
@@ -535,6 +597,24 @@ def main():
     def on_closing():
         if app.is_connected:
             app.disconnect_device()
+        
+        # NUEVO: Mostrar opción para mantener servidor activo
+        if not app.service_running and app.flask_thread and app.flask_thread.is_alive():
+            result = messagebox.askyesno(
+                "Cerrar Aplicación", 
+                "¿Desea mantener el servidor activo en segundo plano?\n\n" +
+                "Sí: El servidor seguirá ejecutándose (puerto 3322)\n" +
+                "No: Cerrar completamente la aplicación"
+            )
+            
+            if not result:  # Usuario eligió "No" - cerrar todo
+                try:
+                    # Intentar cerrar el servidor Flask
+                    import requests
+                    requests.post('http://127.0.0.1:3322/shutdown', timeout=2)
+                except:
+                    pass
+        
         root.destroy()
     
     root.protocol("WM_DELETE_WINDOW", on_closing)

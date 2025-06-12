@@ -1,5 +1,7 @@
-pyzk>=2.0.0
+tkinter
+flask>=2.0.0
+flask-cors>=3.0.0
 requests>=2.25.0
-pyinstaller>=5.0.0
-flask==2.3.3
-flask-cors==4.0.0
+pyzk>=0.9
+pywin32>=301
+pyinstaller>=4.0
