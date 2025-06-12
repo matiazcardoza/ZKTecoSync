@@ -43,10 +43,10 @@ Name: "{group}\Desinstalar ZKTeco Sync"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\ZKTeco Sync"; Filename: "{app}\ZKTeco-Sync.exe"; Tasks: desktopicon
 
 [Run]
-; Opción para instalar servicio al final (con privilegios heredados)
-Filename: "{app}\install_service.bat"; Description: "Instalar servicio ZKTeco Sync"; Flags: postinstall skipifsilent runascurrentuser; Tasks: installservice
+; Instalar y iniciar servicio automáticamente (SIN checkbox)
+Filename: "{app}\install_service.bat"; Flags: runhidden waituntilterminated; Tasks: installservice
 ; Opción para ejecutar la aplicación
-Filename: "{app}\ZKTeco-Sync.exe"; Description: "Ejecutar ZKTeco Sync"; Flags: nowait postinstall skipifsilent unchecked
+Filename: "{app}\ZKTeco-Sync.exe"; Description: "Ejecutar ZKTeco Sync"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\logs"
