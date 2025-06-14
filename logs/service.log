@@ -1,0 +1,64 @@
+[2025-06-12 19:58:40] Directorio creado: D:\PROYECTOSPYTHON\ZKTecoSync\logs
+[2025-06-12 19:58:40] Parámetros desde archivo: Dispositivo ZKTeco
+[2025-06-12 19:58:40] Verificando estado de servicios existentes...
+[2025-06-12 19:58:44] ✓ Puerto 3322 disponible
+[2025-06-12 19:58:44] === INICIANDO SERVICIO EN MODO DEBUG ===
+[2025-06-12 19:58:44] Directorio base: D:\PROYECTOSPYTHON\ZKTecoSync
+[2025-06-12 19:58:44] WIN32 disponible: True
+[2025-06-12 19:58:44] Flask disponible: True
+[2025-06-12 19:58:44] ZK disponible: True
+[2025-06-12 19:58:44] ✓ Parámetros del sistema cargados: Dispositivo ZKTeco
+[2025-06-12 19:58:44] Iniciando servidor Flask en puerto 3322...
+[2025-06-12 19:58:46] ✓ Servidor Flask iniciado correctamente en puerto 3322
+[2025-06-12 19:58:46] ✓ Servicio iniciado en modo debug
+[2025-06-12 19:58:46] Presiona Ctrl+C para detener
+[2025-06-12 20:01:03] Interrupción por teclado recibida
+[2025-06-12 20:01:03] === DEBUG FINALIZADO ===
+[2025-06-13 09:18:58] Parámetros desde archivo: Dispositivo ZKTeco
+[2025-06-13 09:18:58] Verificando estado de servicios existentes...
+[2025-06-13 09:19:02] ✓ Puerto 3322 disponible
+[2025-06-13 09:19:02] Iniciando servicio ZKTeco Sync...
+[2025-06-13 09:19:02] === INICIANDO SERVICIO ZKTECO SYNC ===
+[2025-06-13 09:19:02] Directorio base: D:\PROYECTOSPYTHON\ZKTecoSync
+[2025-06-13 09:19:02] Python executable: C:\Users\MATIAZ\AppData\Local\Programs\Python\Python313\pythonservice.exe
+[2025-06-13 09:19:02] WIN32 disponible: True
+[2025-06-13 09:19:02] Flask disponible: True
+[2025-06-13 09:19:02] ZK disponible: True
+[2025-06-13 09:19:02] ✓ Parámetros del sistema cargados: Dispositivo ZKTeco
+[2025-06-13 09:19:02] Iniciando servidor Flask en puerto 3322...
+[2025-06-13 09:19:05] ✓ Servidor Flask iniciado correctamente en puerto 3322
+[2025-06-13 09:19:05] ✓ Servicio ZKTeco iniciado correctamente
+[2025-06-13 09:22:41] === SERVICIO FINALIZADO ===
+[2025-06-13 09:22:41] Servicio detenido
+[2025-06-13 10:42:32] Parámetros desde archivo: Dispositivo ZKTeco
+[2025-06-13 10:42:32] Verificando estado de servicios existentes...
+[2025-06-13 10:42:36] ✓ Puerto 3322 disponible
+[2025-06-13 10:42:36] Iniciando servicio ZKTeco Sync...
+[2025-06-13 10:42:36] === INICIANDO SERVICIO ZKTECO SYNC ===
+[2025-06-13 10:42:36] Directorio base: D:\PROYECTOSPYTHON\ZKTecoSync
+[2025-06-13 10:42:36] Python executable: C:\Users\MATIAZ\AppData\Local\Programs\Python\Python313\pythonservice.exe
+[2025-06-13 10:42:36] WIN32 disponible: True
+[2025-06-13 10:42:36] Flask disponible: True
+[2025-06-13 10:42:36] ZK disponible: True
+[2025-06-13 10:42:36] ✓ Parámetros del sistema cargados: Dispositivo ZKTeco
+[2025-06-13 10:42:36] Iniciando servidor Flask en puerto 3322...
+[2025-06-13 10:42:39] ✓ Servidor Flask iniciado correctamente en puerto 3322
+[2025-06-13 10:42:39] ✓ Servicio ZKTeco iniciado correctamente
+[2025-06-13 10:43:20] Servicio detenido
+[2025-06-13 10:43:20] === SERVICIO FINALIZADO ===
+[2025-06-13 11:45:13] Parámetros desde archivo: Dispositivo ZKTeco
+[2025-06-13 11:45:13] Verificando estado de servicios existentes...
+[2025-06-13 11:45:17] ✓ Puerto 3322 disponible
+[2025-06-13 11:45:17] Iniciando servicio ZKTeco Sync...
+[2025-06-13 11:45:17] === INICIANDO SERVICIO ZKTECO SYNC ===
+[2025-06-13 11:45:17] Directorio base: D:\PROYECTOSPYTHON\ZKTecoSync
+[2025-06-13 11:45:17] Python executable: C:\Users\MATIAZ\AppData\Local\Programs\Python\Python313\pythonservice.exe
+[2025-06-13 11:45:17] WIN32 disponible: True
+[2025-06-13 11:45:17] Flask disponible: True
+[2025-06-13 11:45:17] ZK disponible: True
+[2025-06-13 11:45:17] ✓ Parámetros del sistema cargados: Dispositivo ZKTeco
+[2025-06-13 11:45:17] Iniciando servidor Flask en puerto 3322...
+[2025-06-13 11:45:20] ✓ Servidor Flask iniciado correctamente en puerto 3322
+[2025-06-13 11:45:20] ✓ Servicio ZKTeco iniciado correctamente
+[2025-06-13 11:45:51] Servicio detenido
+[2025-06-13 11:45:51] === SERVICIO FINALIZADO ===

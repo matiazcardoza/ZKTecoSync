@@ -1,650 +1,109 @@
-estoy desarrollando una app:
-esta es su estructura:
-📁 tu_proyecto/
-├── 📁 dist/
-│   ├── ZKTeco-Sync.exe          
-│   └── zkteco_service.exe       
-├── install_service.bat          
-    @echo off
-setlocal enabledelayedexpansion
-
-echo ==========================================
-echo Instalando servicio ZKTeco Sync...
-echo ==========================================
-echo.
-
-REM Verificar privilegios de administrador
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: Este script debe ejecutarse como Administrador
-    echo.
-    echo Solucion:
-    echo 1. Click derecho en el archivo install_service.bat
-    echo 2. Seleccionar "Ejecutar como administrador"
-    echo.
-    pause
-    exit /b 1
-)
-
-REM Cambiar al directorio de la aplicación
-cd /d "%~dp0"
-
-REM Verificar si el ejecutable del servicio existe
-if not exist "zkteco_service.exe" (
-    echo ERROR: No se encontró zkteco_service.exe
-    echo Verifique que el archivo esté presente en la carpeta de instalación.
-    echo Directorio actual: %CD%
-    pause
-    exit /b 1
-)
-
-echo Verificando si el servicio ya existe...
-sc query ZKTecoSync >nul 2>&1
-if %errorlevel% == 0 (
-    echo El servicio ya existe. Deteniéndolo primero...
-    net stop ZKTecoSync >nul 2>&1
-    if %errorlevel% == 0 (
-        echo ✓ Servicio detenido
-    ) else (
-        echo ! El servicio no estaba ejecutándose
-    )
-    
-    echo Eliminando servicio existente...
-    zkteco_service.exe remove >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo Intentando eliminación manual...
-        sc delete ZKTecoSync >nul 2>&1
-    )
-    echo ✓ Servicio anterior eliminado
-    timeout /t 3 /nobreak >nul
-)
-
-echo.
-echo Instalando nuevo servicio...
-zkteco_service.exe install
-if %errorlevel% neq 0 (
-    echo ERROR: No se pudo instalar el servicio.
-    echo Código de error: %errorlevel%
-    echo.
-    echo Posibles causas:
-    echo - Falta permisos de administrador
-    echo - Antivirus bloqueando la instalación
-    echo - Puerto 3322 ya está en uso por otro programa
-    echo.
-    pause
-    exit /b 1
-)
-
-echo ✓ Servicio instalado correctamente
-
-echo.
-echo Configurando inicio automático...
-sc config ZKTecoSync start= auto
-if %errorlevel% neq 0 (
-    echo ADVERTENCIA: No se pudo configurar el inicio automático.
-    echo El servicio deberá iniciarse manualmente.
-) else (
-    echo ✓ Inicio automático configurado
-)
-
-echo.
-echo Configurando descripción del servicio...
-sc description ZKTecoSync "Servicio de sincronización para dispositivos ZKTeco - Proporciona API REST en puerto 3322"
-if %errorlevel% == 0 (
-    echo ✓ Descripción configurada
-)
-
-echo.
-echo Iniciando servicio automáticamente...
-net start ZKTecoSync
-if %errorlevel% neq 0 (
-    echo ERROR: No se pudo iniciar el servicio.
-    echo.
-    echo Posibles causas:
-    echo - Puerto 3322 ya está en uso
-    echo - Faltan dependencias de Python
-    echo - Error en la configuración del servicio
-    echo.
-    echo Revise el log del servicio en: logs\service.log
-    echo También puede verificar en el Visor de eventos de Windows
-    echo.
-    pause
-    exit /b 1
-)
-
-echo ✓ Servicio iniciado correctamente y ejecutándose en segundo plano
-
-REM Esperar un momento para que el servicio se inicie completamente
-echo.
-echo Verificando que el servicio esté funcionando...
-timeout /t 5 /nobreak >nul
-
-REM Intentar hacer una petición HTTP para verificar
-curl -s "http://127.0.0.1:3322/estado" >nul 2>&1
-if %errorlevel% == 0 (
-    echo ✓ API REST funcionando correctamente
-) else (
-    echo ! No se pudo verificar la API REST
-    echo   Esto es normal si curl no está instalado
-)
-
-echo.
-echo ==========================================
-echo ✓ Servicio ZKTeco Sync instalado correctamente
-echo ==========================================
-echo.
-echo IMPORTANTE: El servicio ahora se ejecuta automáticamente en segundo plano
-echo y se iniciará automáticamente con Windows.
-echo.
-echo Estado del servicio:
-sc query ZKTecoSync | findstr "STATE"
-echo.
-echo El servidor está disponible en: http://127.0.0.1:3322
-echo Para verificar el estado: http://127.0.0.1:3322/estado
-echo.
-echo La aplicación GUI (ZKTeco-Sync.exe) ahora puede usarse como cliente
-echo sin necesidad de mantener el servidor activo manualmente.
-echo.
-echo Comandos útiles:
-echo - Detener servicio: net stop ZKTecoSync
-echo - Iniciar servicio: net start ZKTecoSync
-echo - Ver logs: notepad logs\service.log
-echo.
-echo Presione cualquier tecla para continuar...
-pause >nul
-exit /b 0
-├── main.py
-│   import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+main.py:
+import tkinter as tk
+from tkinter import ttk, messagebox
+import threading
+import time
+from datetime import datetime
+import json
 import requests
-import json
-import threading
-import time
-import os
 import sys
-from datetime import datetime
-
-class ZKTecoSyncGUI:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("ZKTeco Sync - Cliente GUI v1.1")
-        self.root.geometry("800x600")
-        self.root.resizable(True, True)
-        
-        # Variables de estado
-        self.service_connected = False
-        self.device_info = {}
-        self.last_status_check = None
-        
-        # Configurar cierre de ventana - MODIFICADO: Ya no pregunta sobre mantener servidor
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
-        # Crear interfaz
-        self.create_interface()
-        
-        # Verificar conexión inicial con el servicio
-        self.check_initial_connection()
-        
-        # Iniciar actualización periódica de estado
-        self.start_status_updates()
-    
-    def create_interface(self):
-        """Crear la interfaz gráfica"""
-        # Frame principal
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Configurar expansión
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(2, weight=1)
-        
-        # Título
-        title_label = ttk.Label(main_frame, text="ZKTeco Sync - Cliente GUI", 
-                               font=("Arial", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
-        
-        # Frame de estado del servicio
-        status_frame = ttk.LabelFrame(main_frame, text="Estado del Servicio", padding="10")
-        status_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        status_frame.columnconfigure(1, weight=1)
-        
-        # Estado del servicio
-        ttk.Label(status_frame, text="Servicio:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
-        self.service_status_label = ttk.Label(status_frame, text="🔴 Verificando...", 
-                                            foreground="orange")
-        self.service_status_label.grid(row=0, column=1, sticky=tk.W)
-        
-        # Estado del dispositivo
-        ttk.Label(status_frame, text="Dispositivo:").grid(row=1, column=0, sticky=tk.W, padx=(0, 10))
-        self.device_status_label = ttk.Label(status_frame, text="🔴 Sin información", 
-                                           foreground="red")
-        self.device_status_label.grid(row=1, column=1, sticky=tk.W)
-        
-        # Información del dispositivo
-        ttk.Label(status_frame, text="Info:").grid(row=2, column=0, sticky=tk.W, padx=(0, 10))
-        self.device_info_label = ttk.Label(status_frame, text="No disponible")
-        self.device_info_label.grid(row=2, column=1, sticky=tk.W)
-        
-        # Botones de control
-        button_frame = ttk.Frame(status_frame)
-        button_frame.grid(row=3, column=0, columnspan=2, pady=(10, 0))
-        
-        self.refresh_button = ttk.Button(button_frame, text="🔄 Actualizar Estado", 
-                                       command=self.manual_refresh)
-        self.refresh_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.restart_service_button = ttk.Button(button_frame, text="🔄 Reiniciar Servicio", 
-                                               command=self.restart_service)
-        self.restart_service_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.open_config_button = ttk.Button(button_frame, text="⚙️ Configuración", 
-                                           command=self.open_config)
-        self.open_config_button.pack(side=tk.LEFT)
-        
-        # Frame de logs
-        log_frame = ttk.LabelFrame(main_frame, text="Registro de Actividad", padding="10")
-        log_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
-        
-        # Área de texto para logs
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, width=70)
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Botón para limpiar logs
-        clear_log_button = ttk.Button(log_frame, text="🗑️ Limpiar Log", 
-                                    command=self.clear_log)
-        clear_log_button.grid(row=1, column=0, sticky=tk.E, pady=(5, 0))
-        
-        # Frame de información - MODIFICADO: Actualizada la información
-        info_frame = ttk.LabelFrame(main_frame, text="Información", padding="10")
-        info_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
-        
-        info_text = ("Esta aplicación es un cliente que se conecta al servicio ZKTeco Sync instalado "
-                    "en el sistema. El servicio se ejecuta en segundo plano y proporciona la API REST "
-                    "en el puerto 3322. Para que funcione correctamente, el servicio debe estar instalado "
-                    "y ejecutándose.")
-        ttk.Label(info_frame, text=info_text, wraplength=750).pack()
-        
-        # Agregar log inicial
-        self.add_log("=== Cliente GUI ZKTeco Sync iniciado ===")
-        self.add_log("MODO: Solo cliente - El servicio debe estar instalado y ejecutándose")
-    
-    def check_initial_connection(self):
-        """Verificar conexión inicial con el servicio"""
-        self.add_log("Verificando conexión con el servicio ZKTeco Sync...")
-        
-        if self.check_service_status():
-            self.add_log("✓ Conectado al servicio ZKTeco Sync")
-            self.update_service_info()
-        else:
-            self.add_log("⚠️ No se pudo conectar al servicio")
-            self.add_log("Verificando si el servicio está instalado...")
-            
-            # Verificar si el servicio está instalado
-            result = os.system('sc query ZKTecoSync >nul 2>&1')
-            if result == 0:
-                self.add_log("✓ Servicio ZKTeco Sync encontrado")
-                self.add_log("Intentando iniciar el servicio...")
-                if self.start_service_if_needed():
-                    self.add_log("✓ Servicio iniciado correctamente")
-                    time.sleep(3)  # Dar tiempo a que inicie completamente
-                    self.update_service_info()
-                else:
-                    self.add_log("❌ No se pudo iniciar el servicio")
-                    self.show_service_error()
-            else:
-                self.add_log("❌ Servicio ZKTeco Sync no está instalado")
-                self.show_service_not_installed_error()
-    
-    def check_service_status(self):
-        """Verificar si el servicio está ejecutándose"""
-        try:
-            response = requests.get("http://127.0.0.1:3322/estado", timeout=5)
-            if response.status_code == 200:
-                data = response.json()
-                self.service_connected = data.get('status') == 'servicio activo'
-                return self.service_connected
-        except requests.exceptions.RequestException:
-            pass
-        
-        self.service_connected = False
-        return False
-    
-    def get_service_info(self):
-        """Obtener información del servicio"""
-        try:
-            response = requests.get("http://127.0.0.1:3322/info", timeout=5)
-            if response.status_code == 200:
-                return response.json()
-        except requests.exceptions.RequestException:
-            pass
-        return None
-    
-    def ping_device(self):
-        """Verificar estado del dispositivo"""
-        try:
-            response = requests.get("http://127.0.0.1:3322/ping-device", timeout=5)
-            if response.status_code == 200:
-                return response.json()
-        except requests.exceptions.RequestException:
-            pass
-        return None
-    
-    def start_service_if_needed(self):
-        """Intentar iniciar el servicio si no está ejecutándose"""
-        if not self.check_service_status():
-            try:
-                # Intentar iniciar el servicio
-                result = os.system("net start ZKTecoSync >nul 2>&1")
-                if result == 0:
-                    self.add_log("Comando 'net start ZKTecoSync' ejecutado exitosamente")
-                    time.sleep(5)  # Esperar más tiempo a que inicie
-                    return self.check_service_status()
-                else:
-                    self.add_log(f"Error al ejecutar 'net start': código {result}")
-                    return False
-            except Exception as e:
-                self.add_log(f"Error iniciando servicio: {e}")
-                return False
-        return True
-    
-    def restart_service(self):
-        """Reiniciar el servicio"""
-        self.add_log("Reiniciando servicio ZKTeco Sync...")
-        
-        try:
-            # Detener servicio
-            self.add_log("Deteniendo servicio...")
-            os.system("net stop ZKTecoSync >nul 2>&1")
-            time.sleep(3)
-            
-            # Iniciar servicio
-            self.add_log("Iniciando servicio...")
-            result = os.system("net start ZKTecoSync >nul 2>&1")
-            
-            if result == 0:
-                time.sleep(5)
-                if self.check_service_status():
-                    self.add_log("✓ Servicio reiniciado correctamente")
-                    self.update_service_info()
-                else:
-                    self.add_log("❌ El servicio no responde después del reinicio")
-            else:
-                self.add_log("❌ Error al reiniciar el servicio")
-                
-        except Exception as e:
-            self.add_log(f"Error durante el reinicio: {e}")
-    
-    def update_service_info(self):
-        """Actualizar información del servicio en la interfaz"""
-        if self.check_service_status():
-            # Servicio activo
-            self.service_status_label.config(text="🟢 Servicio activo", foreground="green")
-            
-            # Obtener información del servicio
-            info = self.get_service_info()
-            if info:
-                self.device_info = info
-                device_info_text = info.get('device_info', {})
-                
-                if device_info_text:
-                    info_str = f"{device_info_text.get('dispositivo', 'N/A')} - {device_info_text.get('ip', 'N/A')}:{device_info_text.get('puerto', 'N/A')}"
-                    self.device_info_label.config(text=info_str)
-                else:
-                    self.device_info_label.config(text="Configuración no encontrada")
-                
-                # Verificar estado del dispositivo
-                device_ping = self.ping_device()
-                if device_ping:
-                    if device_ping.get('dispositivo_conectado', False):
-                        self.device_status_label.config(text="🟢 Dispositivo conectado", foreground="green")
-                    else:
-                        self.device_status_label.config(text="🔴 Dispositivo desconectado", foreground="red")
-                else:
-                    self.device_status_label.config(text="🔴 Sin información", foreground="red")
-            else:
-                self.device_info_label.config(text="Error obteniendo información")
-        else:
-            # Servicio inactivo
-            self.service_status_label.config(text="🔴 Servicio inactivo", foreground="red")
-            self.device_status_label.config(text="🔴 Sin información", foreground="red")
-            self.device_info_label.config(text="Servicio no disponible")
-    
-    def start_status_updates(self):
-        """Iniciar actualizaciones periódicas de estado"""
-        def update_loop():
-            while True:
-                try:
-                    self.root.after(0, self.update_service_info)
-                    time.sleep(30)  # Actualizar cada 30 segundos
-                except:
-                    break
-        
-        update_thread = threading.Thread(target=update_loop, daemon=True)
-        update_thread.start()
-    
-    def manual_refresh(self):
-        """Actualización manual del estado"""
-        self.add_log("Actualizando estado manualmente...")
-        self.update_service_info()
-    
-    def open_config(self):
-        """Abrir archivo de configuración"""
-        try:
-            # Buscar el archivo de configuración en la ubicación de instalación
-            possible_paths = [
-                os.path.join(os.path.dirname(__file__), 'config', 'device.json'),
-                os.path.join(os.environ.get('ProgramFiles', ''), 'ZKTeco Sync', 'config', 'device.json'),
-                os.path.join(os.path.dirname(sys.executable), 'config', 'device.json')
-            ]
-            
-            config_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    config_path = path
-                    break
-            
-            if config_path:
-                os.startfile(config_path)
-                self.add_log(f"Abriendo configuración: {config_path}")
-            else:
-                self.add_log("❌ Archivo de configuración no encontrado")
-                messagebox.showwarning("Archivo no encontrado", 
-                                     "No se encontró el archivo de configuración.\n\n"
-                                     "Ubicaciones verificadas:\n" + "\n".join(possible_paths))
-        except Exception as e:
-            self.add_log(f"Error abriendo configuración: {e}")
-            messagebox.showerror("Error", f"No se pudo abrir la configuración:\n{e}")
-    
-    def show_service_error(self):
-        """Mostrar error de conexión con el servicio"""
-        messagebox.showwarning(
-            "Servicio no disponible",
-            "No se pudo conectar al servicio ZKTeco Sync.\n\n"
-            "Posibles causas:\n"
-            "• El servicio no está ejecutándose\n"
-            "• El puerto 3322 está bloqueado por firewall\n"
-            "• Error en el servicio\n\n"
-            "Soluciones:\n"
-            "• Use el botón 'Reiniciar Servicio'\n"
-            "• Verifique los logs del servicio\n"
-            "• Reinstale el servicio si es necesario"
-        )
-    
-    def show_service_not_installed_error(self):
-        """Mostrar error cuando el servicio no está instalado"""
-        messagebox.showerror(
-            "Servicio no instalado",
-            "El servicio ZKTeco Sync no está instalado en el sistema.\n\n"
-            "Para usar esta aplicación debe:\n\n"
-            "1. Ejecutar el instalador nuevamente\n"
-            "2. Marcar la opción 'Instalar servicio de Windows'\n"
-            "3. Completar la instalación\n\n"
-            "O ejecutar manualmente 'install_service.bat' como Administrador"
-        )
-    
-    def add_log(self, message):
-        """Agregar mensaje al log"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_message = f"[{timestamp}] {message}\n"
-        
-        # Agregar al widget de texto
-        self.log_text.insert(tk.END, log_message)
-        self.log_text.see(tk.END)  # Scroll automático
-        
-        # Limitar número de líneas (mantener últimas 1000)
-        lines = self.log_text.get("1.0", tk.END).split('\n')
-        if len(lines) > 1000:
-            self.log_text.delete("1.0", f"{len(lines)-1000}.0")
-    
-    def clear_log(self):
-        """Limpiar el área de log"""
-        self.log_text.delete("1.0", tk.END)
-        self.add_log("=== Log limpiado ===")
-    
-    def on_closing(self):
-        """Manejar cierre de la aplicación - SIMPLIFICADO"""
-        # Ya no pregunta sobre mantener el servidor porque el servicio es independiente
-        self.add_log("=== Cerrando cliente GUI ===")
-        self.add_log("El servicio ZKTeco Sync continuará ejecutándose en segundo plano")
-        self.root.destroy()
-    
-    def run(self):
-        """Ejecutar la aplicación"""
-        try:
-            self.root.mainloop()
-        except KeyboardInterrupt:
-            self.add_log("Aplicación interrumpida por el usuario")
-        except Exception as e:
-            self.add_log(f"Error en la aplicación: {e}")
-            messagebox.showerror("Error", f"Error en la aplicación:\n{e}")
-
-
-def main():
-    """Función principal"""
-    try:
-        # Crear y ejecutar la aplicación
-        app = ZKTecoSyncGUI()
-        app.run()
-    except Exception as e:
-        messagebox.showerror("Error Fatal", f"Error al iniciar la aplicación:\n{e}")
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
-├── zkteco_service.py           
-          import sys
+import argparse
 import os
-import time
-import json
 import socket
-import threading
-from datetime import datetime
-
-# Importaciones de servicio de Windows
-import win32serviceutil
-import win32service
-import win32event
-import servicemanager
-
+from urllib.parse import urljoin
+from flask import Flask, jsonify, request
 # Importaciones para Flask
 from flask import Flask, jsonify
 from flask_cors import CORS
 
-# Importaciones para ZKTeco
+
 try:
     from zk import ZK
     ZK_AVAILABLE = True
 except ImportError:
     ZK_AVAILABLE = False
 
-class ZKTecoService(win32serviceutil.ServiceFramework):
-    _svc_name_ = "ZKTecoSync"
-    _svc_display_name_ = "ZKTeco Sync Service"
-    _svc_description_ = "Servicio de sincronización para dispositivos ZKTeco - API REST en puerto 3322"
-    
-    def __init__(self, args):
-        win32serviceutil.ServiceFramework.__init__(self, args)
-        self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
-        self.running = True
+class ZKTecoApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("ZKTeco Sync v1.1 - Solo Asistencias")
+        self.root.resizable(True, True)
+        self.root.resizable(False, False)
         
-        # Variables del servicio
+        # Variables
+        self.connection = None
+        self.device = None
+        self.is_connected = False
+        
+        # Variables para el servidor Flask
         self.flask_app = None
         self.flask_thread = None
-        self.device_connection = None
-        self.system_params = None
+        self.service_running = False
+
+        # OPTIMIZADO: Parsing rápido de parámetros
+        self.system_params = self.parse_system_params_fast()
         
-        # Log del servicio
-        self.log_file = os.path.join(os.path.dirname(__file__), 'logs', 'service.log')
-        os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
-
-    def SvcStop(self):
-        """Detener el servicio"""
-        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-        win32event.SetEvent(self.hWaitStop)
-        self.running = False
-        self.log_service("Servicio detenido")
-
-    def SvcDoRun(self):
-        """Ejecutar el servicio"""
-        servicemanager.LogMsg(
-            servicemanager.EVENTLOG_INFORMATION_TYPE,
-            servicemanager.PYS_SERVICE_STARTED,
-            (self._svc_name_, '')
-        )
+        # Variables para dispositivo (ahora desde parámetros)
+        self.device_info = None
+        self.current_device_id = None
         
-        self.log_service("Iniciando servicio ZKTeco Sync...")
-        self.main()
+        # Verificar si el servicio ya está ejecutándose
+        self.check_service_status()
+        
+        # Solo iniciar servidor Flask si el servicio NO está corriendo
+        if not self.service_running:
+            self.init_flask_server()
+        
+        self.setup_ui()
+        
+        if not ZK_AVAILABLE:
+            self.log_text.insert(tk.END, "ADVERTENCIA: Librería 'pyzk' no encontrada.\n")
+            self.log_text.insert(tk.END, "Instalar con: pip install pyzk\n\n")
 
-    def log_service(self, message):
-        """Log del servicio"""
+    def check_service_status(self):
+        """Verificar si el servicio ya está ejecutándose en el puerto 3322"""
         try:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(self.log_file, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] {message}\n")
-        except Exception as e:
-            print(f"Error escribiendo log: {e}")
-
-    def is_port_in_use(self, port):
-        """Verificar si un puerto está en uso"""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            return s.connect_ex(('127.0.0.1', port)) == 0
-
-    def load_device_params(self):
-        """Cargar parámetros del dispositivo desde archivo de configuración"""
-        try:
-            config_file = os.path.join(os.path.dirname(__file__), 'config', 'device.json')
-            if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    self.system_params = json.load(f)
-                    self.log_service(f"Parámetros cargados: {self.system_params.get('name', 'N/A')}")
+            # Intentar hacer una petición al servicio
+            response = requests.get('http://127.0.0.1:3322/estado', timeout=2)
+            if response.status_code == 200:
+                data = response.json()
+                # Verificar si es el servicio (no la aplicación GUI)
+                if data.get('tipo') == 'servicio_windows':
+                    self.service_running = True
+                    print("Servicio ZKTeco detectado ejecutándose")
                     return True
-            else:
-                self.log_service("No se encontró archivo de configuración")
-                return False
-        except Exception as e:
-            self.log_service(f"Error cargando configuración: {e}")
-            return False
+        except:
+            pass
+        
+        # También verificar si el puerto está en uso
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                result = s.connect_ex(('127.0.0.1', 3322))
+                if result == 0:
+                    self.service_running = True
+                    print("Puerto 3322 está en uso (posiblemente por el servicio)")
+                    return True
+        except:
+            pass
+        
+        self.service_running = False
+        return False
 
     def init_flask_server(self):
-        """Inicializar servidor Flask"""
+        """Inicializar servidor Flask para verificación remota"""
         try:
             self.flask_app = Flask(__name__)
             CORS(self.flask_app)
             
-            # Ruta para verificar estado
+            # Ruta para verificar estado de la aplicación
             @self.flask_app.route('/estado', methods=['GET'])
             def estado():
                 return jsonify({
-                    'status': 'servicio activo',
+                    'status': 'zkteco activo',
                     'instalado': True,
                     'version': '1.1',
-                    'tipo': 'servicio_windows',
-                    'conectado': self.device_connection is not None,
+                    'tipo': 'aplicacion_gui',
+                    'conectado': self.is_connected,
                     'timestamp': datetime.now().isoformat()
                 })
             
@@ -659,24 +118,782 @@ class ZKTecoService(win32serviceutil.ServiceFramework):
                     }
                 
                 return jsonify({
-                    'aplicacion': 'ZKTeco Sync Service',
+                    'aplicacion': 'ZKTeco Sync GUI',
                     'version': '1.1',
+                    'estado': 'activo',
+                    'tipo': 'aplicacion_gui',
+                    'dispositivo_configurado': bool(self.system_params),
+                    'dispositivo_conectado': self.is_connected,
+                    'device_info': device_info
+                })
+            
+            # Ruta para verificar conectividad con dispositivo
+            @self.flask_app.route('/ping-device', methods=['GET'])
+            def ping_device():
+                return jsonify({
+                    'dispositivo_conectado': self.is_connected,
+                    'puede_sincronizar': self.is_connected and bool(self.system_params)
+                })
+            
+            # NUEVA RUTA: Cerrar servidor
+            @self.flask_app.route('/shutdown', methods=['POST'])
+            def shutdown():
+                func = request.environ.get('werkzeug.server.shutdown')
+                if func is None:
+                    raise RuntimeError('Not running with the Werkzeug Server')
+                func()
+                return jsonify({'message': 'Server shutting down...'})
+            
+            def iniciar_servidor():
+                try:
+                    # CAMBIO CLAVE: daemon=False para que persista
+                    self.flask_app.run(
+                        port=3322, 
+                        host='127.0.0.1', 
+                        debug=False, 
+                        use_reloader=False,
+                        threaded=True
+                    )
+                except Exception as e:
+                    print(f"Error iniciando servidor Flask: {e}")
+            
+            # CAMBIO CLAVE: daemon=False
+            self.flask_thread = threading.Thread(target=iniciar_servidor, daemon=False)
+            self.flask_thread.start()
+            
+            print("Servidor Flask iniciado en http://127.0.0.1:3322")
+            
+        except Exception as e:
+            print(f"Error configurando servidor Flask: {e}")
+
+    def parse_system_params_fast(self):
+        """Parsing optimizado de parámetros del sistema"""
+        try:
+            # Método más rápido: buscar directamente en sys.argv
+            for i, arg in enumerate(sys.argv):
+                if arg == '--params-system' and i + 1 < len(sys.argv):
+                    param_value = sys.argv[i + 1]
+                    try:
+                        return json.loads(param_value)
+                    except json.JSONDecodeError:
+                        # Intentar limpiar el JSON una sola vez
+                        cleaned = param_value.strip().replace(' :', ':').replace(': ', ':')
+                        try:
+                            return json.loads(cleaned)
+                        except:
+                            return None
+            
+            # Fallback: variable de entorno
+            env_params = os.environ.get('ZKTECO_PARAMS')
+            if env_params:
+                return json.loads(env_params)
+            
+            return None
+            
+        except Exception:
+            # Sin prints de debug para mayor velocidad
+            return None
+    
+    def setup_ui(self):
+        # Marco principal
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # Configurar device_info una sola vez
+        if self.system_params:
+            self.device_info = {
+                'id': self.system_params.get('id'),
+                'name': self.system_params.get('name', ''),
+                'ip_address': self.system_params.get('ip_address', ''),
+                'port': self.system_params.get('port', 4370)
+            }
+            self.current_device_id = self.device_info['id']
+
+        # Configuración de conexión (simplificada)
+        config_frame = ttk.LabelFrame(main_frame, text="Configuración de Conexión", padding="10")
+        config_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        if self.system_params:
+            # Layout más eficiente
+            labels_data = [
+                ("Dispositivo:", self.device_info['name']),
+                ("IP:", self.device_info['ip_address']),
+                ("Puerto:", str(self.device_info['port']))
+            ]
+            
+            for i, (label_text, value_text) in enumerate(labels_data):
+                ttk.Label(config_frame, text=label_text).grid(row=i, column=0, sticky=tk.W, padx=(0, 10))
+                value_label = ttk.Label(config_frame, text=value_text, font=('Arial', 9, 'bold') if i == 0 else None)
+                value_label.grid(row=i, column=1, sticky=tk.W)
+        else:
+            error_label = ttk.Label(config_frame, text="No se puede continuar sin parámetros del dispositivo", foreground='red')
+            error_label.grid(row=0, column=0, columnspan=2)
+
+        # Mostrar información del servidor Flask
+        server_frame = ttk.LabelFrame(main_frame, text="Estado del Servidor", padding="10")
+        server_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        if self.service_running:
+            ttk.Label(server_frame, text="Estado:").grid(row=0, column=0, sticky=tk.W)
+            ttk.Label(server_frame, text="Servicio de Windows ejecutándose", font=('Arial', 9, 'bold'), foreground='green').grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+            ttk.Label(server_frame, text="URL:").grid(row=1, column=0, sticky=tk.W)
+            ttk.Label(server_frame, text="http://127.0.0.1:3322/estado", font=('Arial', 9)).grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+        else:
+            ttk.Label(server_frame, text="Estado:").grid(row=0, column=0, sticky=tk.W)
+            ttk.Label(server_frame, text="Aplicación GUI activa", font=('Arial', 9, 'bold'), foreground='blue').grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+            ttk.Label(server_frame, text="URL:").grid(row=1, column=0, sticky=tk.W)
+            ttk.Label(server_frame, text="http://127.0.0.1:3322/estado", font=('Arial', 9)).grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+
+        # Timeout
+        ttk.Label(config_frame, text="Timeout (s):").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        self.timeout_var = tk.StringVar(value="5")
+        timeout_entry = ttk.Entry(config_frame, textvariable=self.timeout_var, width=10)
+        timeout_entry.grid(row=3, column=1, sticky=tk.W, pady=(10, 0))
+
+        # Botones de conexión
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
+        
+        # Solo habilitar botones si tenemos parámetros
+        button_state = "normal" if self.system_params else "disabled"
+        
+        self.test_btn = ttk.Button(button_frame, text="Probar Conexión", command=self.test_connection, state=button_state)
+        self.test_btn.grid(row=0, column=0, padx=(0, 10))
+        
+        self.connect_btn = ttk.Button(button_frame, text="Conectar", command=self.connect_device, state=button_state)
+        self.connect_btn.grid(row=0, column=1, padx=(0, 10))
+        
+        self.disconnect_btn = ttk.Button(button_frame, text="Desconectar", command=self.disconnect_device, state="disabled")
+        self.disconnect_btn.grid(row=0, column=2)
+        
+        # Indicador de estado
+        status_frame = ttk.Frame(main_frame)
+        status_frame.grid(row=3, column=0, columnspan=2, pady=(0, 10))
+        
+        ttk.Label(status_frame, text="Estado:").grid(row=0, column=0, padx=(0, 10))
+        self.status_var = tk.StringVar(value="Desconectado")
+        self.status_label = ttk.Label(status_frame, textvariable=self.status_var, foreground="red")
+        self.status_label.grid(row=0, column=1)
+        
+        # Botón de extracción de asistencias únicamente
+        data_frame = ttk.LabelFrame(main_frame, text="Extracción y Sincronización", padding="10")
+        data_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        self.extract_attendance_btn = ttk.Button(data_frame, text="Extraer y Enviar Asistencias", command=self.extract_attendance, state="disabled")
+        self.extract_attendance_btn.grid(row=0, column=0)
+        
+        # Log de eventos
+        log_frame = ttk.LabelFrame(main_frame, text="Log de Eventos", padding="10")
+        log_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        
+        # Texto con scrollbar
+        log_scroll_frame = ttk.Frame(log_frame)
+        log_scroll_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        self.log_text = tk.Text(log_scroll_frame, height=15, width=70)
+        scrollbar = ttk.Scrollbar(log_scroll_frame, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+        
+        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Botón para limpiar log
+        ttk.Button(log_frame, text="Limpiar Log", command=self.clear_log).grid(row=1, column=0, pady=(10, 0))
+        
+        # Configurar weights para redimensionamiento
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(5, weight=1)
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        log_scroll_frame.columnconfigure(0, weight=1)
+        log_scroll_frame.rowconfigure(0, weight=1)
+        
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        
+        # Log inicial - OPTIMIZADO
+        self.log("Aplicación iniciada - Solo sincronización de asistencias")
+        
+        if self.service_running:
+            self.log("NOTA: Servicio ZKTeco detectado ejecutándose")
+            self.log("La aplicación GUI funciona en modo complementario")
+        else:
+            self.log("Servidor Flask iniciado en puerto 3322")
+        
+        if ZK_AVAILABLE:
+            self.log("Librería ZK cargada correctamente")
+        else:
+            self.log("ADVERTENCIA: Instalar con 'pip install pyzk requests flask flask-cors'")
+        
+        # Log de parámetros - SIMPLIFICADO
+        if self.system_params:
+            self.log(f"✓ Dispositivo configurado: {self.device_info['name']} ({self.device_info['ip_address']}:{self.device_info['port']})")
+        else:
+            self.log("✗ No se recibieron parámetros del sistema")
+
+    def log(self, message):
+        """Agregar mensaje al log con timestamp"""
+        try:
+            if hasattr(self, 'log_text') and self.log_text:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                self.root.after(0, lambda: self._safe_log_insert(timestamp, message))
+            else:
+                print(f"[LOG] {message}")
+        except Exception as e:
+            print(f"[ERROR LOG] {message} - Error: {e}")
+
+    def _safe_log_insert(self, timestamp, message):
+        """Insertar mensaje en el log de forma segura"""
+        try:
+            self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+            self.log_text.see(tk.END)
+            self.root.update_idletasks()
+        except Exception as e:
+            print(f"[ERROR LOG INSERT] {message} - Error: {e}")
+    
+    def clear_log(self):
+        """Limpiar el log"""
+        self.log_text.delete(1.0, tk.END)
+    
+    def test_connection(self):
+        """Probar conexión con el dispositivo - OPTIMIZADO"""
+        if not ZK_AVAILABLE:
+            messagebox.showerror("Error", "Librería pyzk no está instalada")
+            return
+            
+        if not self.system_params:
+            messagebox.showerror("Error", "No hay parámetros de dispositivo disponibles")
+            return
+            
+        def test_conn():
+            try:
+                self.test_btn.config(state="disabled")
+                self.log("Probando conexión...")
+                
+                ip = self.device_info['ip_address']
+                port = int(self.device_info['port'])
+                timeout = int(self.timeout_var.get())
+                
+                # Log reducido para mayor velocidad
+                self.log(f"Conectando a {ip}:{port}")
+                
+                zk = ZK(ip, port=port, timeout=timeout)
+                conn = zk.connect()
+                
+                if conn:
+                    # Obtener solo información de asistencias
+                    try:
+                        attendance_count = len(conn.get_attendance())
+                        
+                        conn.disconnect()
+                        
+                        self.log("✓ Conexión exitosa!")
+                        self.log(f"  - Registros de asistencia: {attendance_count}")
+                        
+                        messagebox.showinfo("Éxito", "Conexión establecida correctamente")
+                    except Exception as e:
+                        conn.disconnect()
+                        self.log(f"✓ Conexión establecida (error obteniendo detalles: {str(e)})")
+                        messagebox.showinfo("Éxito", "Conexión establecida correctamente")
+                else:
+                    self.log("✗ Error: No se pudo establecer conexión")
+                    messagebox.showerror("Error", "No se pudo conectar al dispositivo")
+                    
+            except Exception as e:
+                self.log(f"✗ Error de conexión: {str(e)}")
+                messagebox.showerror("Error", f"Error de conexión: {str(e)}")
+            finally:
+                self.test_btn.config(state="normal")
+        
+        # Ejecutar en hilo separado
+        threading.Thread(target=test_conn, daemon=True).start()
+    
+    def connect_device(self):
+        """Conectar al dispositivo"""
+        if not ZK_AVAILABLE:
+            messagebox.showerror("Error", "Librería pyzk no está instalada")
+            return
+            
+        if not self.system_params:
+            messagebox.showerror("Error", "No hay parámetros de dispositivo disponibles")
+            return
+            
+        def connect():
+            try:
+                self.connect_btn.config(state="disabled")
+                self.log("Conectando al dispositivo...")
+                
+                ip = self.device_info['ip_address']
+                port = int(self.device_info['port'])
+                timeout = int(self.timeout_var.get())
+                
+                self.device = ZK(ip, port=port, timeout=timeout)
+                self.connection = self.device.connect()
+                
+                if self.connection:
+                    self.is_connected = True
+                    self.status_var.set("Conectado")
+                    self.status_label.config(foreground="green")
+                    
+                    # Habilitar solo botón de extracción de asistencias
+                    self.extract_attendance_btn.config(state="normal")
+                    self.disconnect_btn.config(state="normal")
+                    
+                    self.log("✓ Dispositivo conectado exitosamente")
+                    messagebox.showinfo("Éxito", "Dispositivo conectado correctamente")
+                else:
+                    self.log("✗ Error: No se pudo conectar")
+                    messagebox.showerror("Error", "No se pudo conectar al dispositivo")
+                    
+            except Exception as e:
+                self.log(f"✗ Error de conexión: {str(e)}")
+                messagebox.showerror("Error", f"Error de conexión: {str(e)}")
+            finally:
+                if not self.is_connected:
+                    self.connect_btn.config(state="normal")
+        
+        threading.Thread(target=connect, daemon=True).start()
+    
+    def disconnect_device(self):
+        """Desconectar del dispositivo"""
+        try:
+            if self.connection:
+                self.connection.disconnect()
+                self.connection = None
+                self.device = None
+                
+            self.is_connected = False
+            self.status_var.set("Desconectado")
+            self.status_label.config(foreground="red")
+            
+            # Deshabilitar botón de asistencias
+            self.extract_attendance_btn.config(state="disabled")
+            self.disconnect_btn.config(state="disabled")
+            self.connect_btn.config(state="normal")
+            
+            self.log("Dispositivo desconectado")
+            
+        except Exception as e:
+            self.log(f"Error al desconectar: {str(e)}")
+    
+    def extract_attendance(self):
+        """Extraer registros de asistencia y enviar a la nube"""
+        if not self.connection:
+            return
+            
+        def extract():
+            try:
+                self.extract_attendance_btn.config(state="disabled")
+                self.log("Extrayendo registros de asistencia...")
+                
+                attendance = self.connection.get_attendance()
+                
+                if attendance:
+                    attendance_data = []
+                    for record in attendance:
+                        attendance_data.append({
+                            'uid': record.uid,
+                            'id': record.user_id,
+                            'timestamp': record.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                            'state': record.status,
+                            'type': record.punch
+                        })
+                    
+                    self.log(f"✓ {len(attendance)} registros extraídos del dispositivo")
+                    
+                    # Enviar a la nube
+                    cloud_success = self.send_data_to_cloud('attendance', attendance_data, '/api/zkteco/attendance')
+                    
+                    # Mensaje de resultado
+                    if cloud_success:
+                        messagebox.showinfo("Éxito", "Asistencias sincronizadas correctamente")
+                        self.log("✓ Sincronización completada exitosamente")
+                    else:
+                        messagebox.showerror("Error", "No se pudo sincronizar las asistencias")
+                        
+                else:
+                    self.log("No se encontraron registros de asistencia")
+                    messagebox.showinfo("Información", "No se encontraron registros de asistencia en el dispositivo")
+                    
+            except Exception as e:
+                self.log(f"✗ Error extrayendo asistencias: {str(e)}")
+                messagebox.showerror("Error", f"Error extrayendo asistencias: {str(e)}")
+            finally:
+                self.extract_attendance_btn.config(state="normal")
+        
+        threading.Thread(target=extract, daemon=True).start()
+
+    def send_data_to_cloud(self, data_type, data, endpoint):
+        """Enviar solo los datos a Laravel API"""
+        try:
+            self.log(f"Enviando {data_type} a la nube...")
+            
+            # URL base de api Local
+            #base_url = "http://localhost:8000/api/zkteco/attendance"
+            # URL bade de api producción
+            base_url = "https://sistemas.regionpuno.gob.pe/asiss-api/api/zkteco/attendance"
+
+            url = urljoin(base_url, endpoint)
+            
+            # Payload simplificado - solo los datos
+            payload = data  # Directamente el array de datos
+            
+            # Headers para Laravel
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            }
+            
+            # Log para debugging
+            self.log(f"Enviando a: {url}")
+            self.log(f"Cantidad de registros: {len(data)}")
+            
+            # Hacer la petición POST
+            response = requests.post(
+                url, 
+                json=payload,  # Enviar directamente el array
+                headers=headers,
+                timeout=60
+            )
+            
+            # Log de respuesta
+            self.log(f"Código de respuesta: {response.status_code}")
+            
+            if response.status_code == 200:
+                try:
+                    response_data = response.json()
+                    self.log(f"✓ {data_type.title()} enviados exitosamente")
+                    # Si Laravel devuelve información adicional
+                    if isinstance(response_data, dict) and 'message' in response_data:
+                        self.log(f"  - Respuesta: {response_data['message']}")
+                    return True
+                except:
+                    # Si Laravel no devuelve JSON, pero el status es 200
+                    self.log(f"✓ {data_type.title()} enviados exitosamente")
+                    return True
+            else:
+                try:
+                    error_data = response.json()
+                    self.log(f"✗ Error HTTP {response.status_code}: {error_data.get('message', 'Error desconocido')}")
+                except:
+                    self.log(f"✗ Error HTTP {response.status_code}: {response.text[:200]}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            self.log(f"✗ Timeout enviando a la nube (60s)")
+            return False
+        except requests.exceptions.ConnectionError:
+            self.log(f"✗ Error de conexión con el servidor")
+            return False
+        except Exception as e:
+            self.log(f"✗ Error enviando a la nube: {str(e)}")
+            return False
+
+
+def main():
+    root = tk.Tk()
+    app = ZKTecoApp(root)
+    
+    # Manejo del cierre de ventana
+    def on_closing():
+        if app.is_connected:
+            app.disconnect_device()
+        
+        # NUEVO: Mostrar opción para mantener servidor activo
+        if not app.service_running and app.flask_thread and app.flask_thread.is_alive():
+            result = messagebox.askyesno(
+                "Cerrar Aplicación", 
+                "¿Desea mantener el servidor activo en segundo plano?\n\n" +
+                "Sí: El servidor seguirá ejecutándose (puerto 3322)\n" +
+                "No: Cerrar completamente la aplicación"
+            )
+            
+            if not result:  # Usuario eligió "No" - cerrar todo
+                try:
+                    # Intentar cerrar el servidor Flask
+                    import requests
+                    requests.post('http://127.0.0.1:3322/shutdown', timeout=2)
+                except:
+                    pass
+        
+        root.destroy()
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
+
+zkteco_service.py:
+import sys
+import os
+import time
+import json
+import socket
+import threading
+from datetime import datetime
+import traceback
+import subprocess
+
+# Importaciones de servicio de Windows
+try:
+    import win32serviceutil
+    import win32service
+    import win32event
+    import servicemanager
+    WIN32_AVAILABLE = True
+except ImportError as e:
+    WIN32_AVAILABLE = False
+    print(f"ERROR: Librerías win32 no disponibles: {e}")
+    print("Instale: pip install pywin32")
+
+# Importaciones para Flask
+try:
+    from flask import Flask, jsonify
+    from flask_cors import CORS
+    FLASK_AVAILABLE = True
+except ImportError as e:
+    FLASK_AVAILABLE = False
+    print(f"ERROR: Flask no disponible: {e}")
+
+# Importaciones para ZKTeco
+try:
+    from zk import ZK
+    ZK_AVAILABLE = True
+except ImportError:
+    ZK_AVAILABLE = False
+
+class ZKTecoService(win32serviceutil.ServiceFramework):
+    _svc_name_ = "ZKTecoSync"
+    _svc_display_name_ = "ZKTeco Sync Service"
+    _svc_description_ = "Servicio de sincronización para dispositivos ZKTeco - API REST en puerto 3322"
+    
+    def __init__(self, args):
+        if not WIN32_AVAILABLE:
+            raise Exception("Librerías win32 no disponibles")
+            
+        win32serviceutil.ServiceFramework.__init__(self, args)
+        self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
+        self.running = True
+        
+        # Variables del servicio
+        self.flask_app = None
+        self.flask_thread = None
+        self.device_connection = None
+        self.system_params = None
+        
+        # Determinar directorio base del servicio
+        if hasattr(sys, '_MEIPASS'):
+            # Ejecutándose desde PyInstaller
+            self.base_dir = os.path.dirname(sys.executable)
+        else:
+            # Ejecutándose desde Python
+            self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Log del servicio
+        self.log_dir = os.path.join(self.base_dir, 'logs')
+        self.log_file = os.path.join(self.log_dir, 'service.log')
+        
+        # Crear directorios necesarios
+        self.ensure_directories()
+
+    def ensure_directories(self):
+        """Crear directorios necesarios con manejo de errores"""
+        directories = [
+            os.path.join(self.base_dir, 'logs'),
+            os.path.join(self.base_dir, 'config')
+        ]
+        
+        for directory in directories:
+            try:
+                if not os.path.exists(directory):
+                    os.makedirs(directory, exist_ok=True)
+                    self.log_service(f"Directorio creado: {directory}")
+            except Exception as e:
+                # Log a archivo temporal si no se puede crear el directorio de logs
+                temp_log = os.path.join(os.environ.get('TEMP', '.'), 'zkteco_service_error.log')
+                try:
+                    with open(temp_log, 'a', encoding='utf-8') as f:
+                        f.write(f"[{datetime.now()}] Error creando directorio {directory}: {e}\n")
+                except:
+                    pass
+
+    def SvcStop(self):
+        """Detener el servicio"""
+        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+        win32event.SetEvent(self.hWaitStop)
+        self.running = False
+        self.log_service("Servicio detenido")
+
+    def SvcDoRun(self):
+        """Ejecutar el servicio"""
+        try:
+            servicemanager.LogMsg(
+                servicemanager.EVENTLOG_INFORMATION_TYPE,
+                servicemanager.PYS_SERVICE_STARTED,
+                (self._svc_name_, '')
+            )
+            
+            self.log_service("Iniciando servicio ZKTeco Sync...")
+            self.main()
+        except Exception as e:
+            self.log_service(f"Error crítico en SvcDoRun: {e}")
+            self.log_service(f"Traceback: {traceback.format_exc()}")
+            raise
+
+    def log_service(self, message):
+        """Log del servicio con manejo robusto de errores"""
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_line = f"[{timestamp}] {message}\n"
+            
+            # Intentar escribir al archivo de log principal
+            if os.path.exists(self.log_dir):
+                with open(self.log_file, 'a', encoding='utf-8') as f:
+                    f.write(log_line)
+            else:
+                # Si no existe el directorio, usar log temporal
+                temp_log = os.path.join(os.environ.get('TEMP', '.'), 'zkteco_service.log')
+                with open(temp_log, 'a', encoding='utf-8') as f:
+                    f.write(log_line)
+                    
+            # También enviar al log de eventos de Windows
+            try:
+                servicemanager.LogInfoMsg(f"ZKTeco: {message}")
+            except:
+                pass
+                
+        except Exception as e:
+            # Último recurso: escribir a stdout/stderr
+            try:
+                print(f"LOG ERROR ({e}): {message}")
+            except:
+                pass
+
+    def is_port_in_use(self, port):
+        """Verificar si un puerto está en uso"""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                return s.connect_ex(('127.0.0.1', port)) == 0
+        except Exception as e:
+            self.log_service(f"Error verificando puerto {port}: {e}")
+            return False
+
+    def load_device_params(self):
+        """Cargar parámetros del dispositivo desde archivo de configuración"""
+        try:
+            config_file = os.path.join(self.base_dir, 'config', 'device.json')
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    self.system_params = json.load(f)
+                    self.log_service(f"Parámetros cargados: {self.system_params.get('name', 'N/A')}")
+                    return True
+            else:
+                self.log_service(f"No se encontró archivo de configuración: {config_file}")
+                self.create_default_config()
+                return False
+        except Exception as e:
+            self.log_service(f"Error cargando configuración: {e}")
+            return False
+
+    def create_default_config(self):
+        """Crear archivo de configuración por defecto"""
+        try:
+            config_file = os.path.join(self.base_dir, 'config', 'device.json')
+            default_config = {
+                "id": "1",
+                "name": "Dispositivo ZKTeco",
+                "ip_address": "192.168.1.100",
+                "port": 4370
+            }
+            
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, indent=2, ensure_ascii=False)
+                
+            self.log_service(f"Archivo de configuración por defecto creado: {config_file}")
+            
+        except Exception as e:
+            self.log_service(f"Error creando configuración por defecto: {e}")
+
+    def init_flask_server(self):
+        """Inicializar servidor Flask"""
+        try:
+            if not FLASK_AVAILABLE:
+                self.log_service("ERROR: Flask no está disponible")
+                return False
+                
+            self.flask_app = Flask(__name__)
+            CORS(self.flask_app)
+            
+            # Configurar logging de Flask para que sea silencioso
+            import logging
+            log = logging.getLogger('werkzeug')
+            log.setLevel(logging.ERROR)
+            
+            # Ruta para verificar estado
+            @self.flask_app.route('/estado', methods=['GET'])
+            def estado():
+                return jsonify({
+                    'status': 'servicio activo',
+                    'instalado': True,
+                    'version': '1.2',
+                    'tipo': 'servicio_windows',
+                    'conectado': self.device_connection is not None,
+                    'timestamp': datetime.now().isoformat(),
+                    'base_dir': self.base_dir,
+                    'flask_available': FLASK_AVAILABLE,
+                    'zk_available': ZK_AVAILABLE
+                })
+            
+            @self.flask_app.route('/info', methods=['GET'])
+            def info():
+                device_info = {}
+                if self.system_params:
+                    device_info = {
+                        'dispositivo': self.system_params.get('name', 'N/A'),
+                        'ip': self.system_params.get('ip_address', 'N/A'),
+                        'puerto': self.system_params.get('port', 'N/A')
+                    }
+                
+                return jsonify({
+                    'aplicacion': 'ZKTeco Sync Service',
+                    'version': '1.2',
                     'estado': 'servicio activo',
                     'tipo': 'servicio_windows',
                     'dispositivo_configurado': bool(self.system_params),
                     'dispositivo_conectado': self.device_connection is not None,
-                    'device_info': device_info
+                    'device_info': device_info,
+                    'base_directory': self.base_dir
                 })
             
             @self.flask_app.route('/ping-device', methods=['GET'])
             def ping_device():
                 return jsonify({
                     'dispositivo_conectado': self.device_connection is not None,
-                    'puede_sincronizar': self.device_connection is not None and bool(self.system_params)
+                    'puede_sincronizar': self.device_connection is not None and bool(self.system_params),
+                    'zk_library_available': ZK_AVAILABLE
                 })
+
+            @self.flask_app.route('/logs', methods=['GET'])
+            def get_logs():
+                """Endpoint para obtener los últimos logs"""
+                try:
+                    if os.path.exists(self.log_file):
+                        with open(self.log_file, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+                            # Devolver las últimas 50 líneas
+                            return jsonify({
+                                'logs': lines[-50:] if len(lines) > 50 else lines,
+                                'total_lines': len(lines)
+                            })
+                    else:
+                        return jsonify({'logs': [], 'error': 'Archivo de log no encontrado'})
+                except Exception as e:
+                    return jsonify({'logs': [], 'error': str(e)})
 
             def run_flask():
                 try:
+                    self.log_service("Iniciando servidor Flask en puerto 3322...")
                     self.flask_app.run(
                         port=3322,
                         host='127.0.0.1',
@@ -686,15 +903,25 @@ class ZKTecoService(win32serviceutil.ServiceFramework):
                     )
                 except Exception as e:
                     self.log_service(f"Error en servidor Flask: {e}")
+                    self.log_service(f"Traceback: {traceback.format_exc()}")
 
             self.flask_thread = threading.Thread(target=run_flask, daemon=True)
             self.flask_thread.start()
             
-            self.log_service("Servidor Flask iniciado en puerto 3322")
-            return True
+            # Esperar un momento para que Flask se inicie
+            time.sleep(3)
+            
+            # Verificar que realmente esté escuchando
+            if self.is_port_in_use(3322):
+                self.log_service("✓ Servidor Flask iniciado correctamente en puerto 3322")
+                return True
+            else:
+                self.log_service("✗ Servidor Flask no está escuchando en puerto 3322")
+                return False
             
         except Exception as e:
             self.log_service(f"Error configurando Flask: {e}")
+            self.log_service(f"Traceback: {traceback.format_exc()}")
             return False
 
     def test_device_connection(self):
@@ -710,12 +937,16 @@ class ZKTecoService(win32serviceutil.ServiceFramework):
                     
                     if conn:
                         if not self.device_connection:
-                            self.log_service(f"Conectado a dispositivo {ip}:{port}")
+                            self.log_service(f"✓ Conectado a dispositivo {ip}:{port}")
                         self.device_connection = conn
                     else:
                         if self.device_connection:
-                            self.log_service(f"Perdida conexión con dispositivo {ip}:{port}")
+                            self.log_service(f"✗ Perdida conexión con dispositivo {ip}:{port}")
                         self.device_connection = None
+                elif not ZK_AVAILABLE:
+                    if not hasattr(self, '_zk_warning_logged'):
+                        self.log_service("Advertencia: Librería ZK no disponible para conexión con dispositivo")
+                        self._zk_warning_logged = True
                         
                 # Esperar 5 minutos antes de la siguiente verificación
                 for _ in range(300):  # 5 minutos = 300 segundos
@@ -725,13 +956,20 @@ class ZKTecoService(win32serviceutil.ServiceFramework):
                     
             except Exception as e:
                 if self.device_connection:
-                    self.log_service(f"Error de conexión: {e}")
+                    self.log_service(f"Error de conexión con dispositivo: {e}")
                 self.device_connection = None
                 time.sleep(30)  # Esperar 30 segundos si hay error
 
     def main(self):
         """Función principal del servicio"""
         try:
+            self.log_service("=== INICIANDO SERVICIO ZKTECO SYNC ===")
+            self.log_service(f"Directorio base: {self.base_dir}")
+            self.log_service(f"Python executable: {sys.executable}")
+            self.log_service(f"WIN32 disponible: {WIN32_AVAILABLE}")
+            self.log_service(f"Flask disponible: {FLASK_AVAILABLE}")
+            self.log_service(f"ZK disponible: {ZK_AVAILABLE}")
+            
             # Verificar si el puerto ya está en uso
             if self.is_port_in_use(3322):
                 self.log_service("ERROR: Puerto 3322 ya está en uso. Cerrando servicio.")
@@ -749,7 +987,7 @@ class ZKTecoService(win32serviceutil.ServiceFramework):
             device_thread = threading.Thread(target=self.test_device_connection, daemon=True)
             device_thread.start()
             
-            self.log_service("Servicio ZKTeco iniciado correctamente")
+            self.log_service("✓ Servicio ZKTeco iniciado correctamente")
             
             # Mantener el servicio ejecutándose
             while self.running:
@@ -758,326 +996,171 @@ class ZKTecoService(win32serviceutil.ServiceFramework):
                     break
                     
         except Exception as e:
-            self.log_service(f"Error en servicio principal: {e}")
+            self.log_service(f"ERROR CRÍTICO en servicio principal: {e}")
+            self.log_service(f"Traceback completo: {traceback.format_exc()}")
+            raise
         finally:
-            if self.device_connection:
-                try:
+            try:
+                if self.device_connection:
                     self.device_connection.disconnect()
-                except:
-                    pass
-            self.log_service("Servicio finalizado")
+            except:
+                pass
+            self.log_service("=== SERVICIO FINALIZADO ===")
+
+
+def install_service_with_validation():
+    """Instalar servicio con validaciones adicionales"""
+    print("=== INSTALACIÓN DE SERVICIO ZKTECO SYNC ===")
+    
+    # Verificar dependencias críticas
+    print("Verificando dependencias...")
+    
+    missing_deps = []
+    
+    if not WIN32_AVAILABLE:
+        missing_deps.append("pywin32 (win32serviceutil, win32service, win32event, servicemanager)")
+    
+    if not FLASK_AVAILABLE:
+        missing_deps.append("flask, flask-cors")
+    
+    if missing_deps:
+        print(f"ERROR: Faltan dependencias críticas:")
+        for dep in missing_deps:
+            print(f"  - {dep}")
+        print("\nInstale las dependencias con:")
+        print("  pip install pywin32 flask flask-cors")
+        return False
+    
+    print("✓ Todas las dependencias están disponibles")
+    
+    # Verificar permisos de administrador
+    try:
+        import ctypes
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        if not is_admin:
+            print("ERROR: Se requieren permisos de administrador")
+            print("Ejecute como administrador")
+            return False
+    except:
+        print("Advertencia: No se pudo verificar permisos de administrador")
+    
+    print("✓ Permisos de administrador confirmados")
+    
+    # Instalar servicio
+    try:
+        print("Instalando servicio...")
+        win32serviceutil.InstallService(
+            ZKTecoService,
+            ZKTecoService._svc_name_,
+            ZKTecoService._svc_display_name_,
+            description=ZKTecoService._svc_description_
+        )
+        print("✓ Servicio instalado correctamente")
+        return True
+        
+    except Exception as e:
+        print(f"ERROR instalando servicio: {e}")
+        print(f"Detalles: {traceback.format_exc()}")
+        return False
 
 
 def create_default_config():
     """Crear archivo de configuración por defecto"""
-    config_dir = os.path.join(os.path.dirname(__file__), 'config')
-    os.makedirs(config_dir, exist_ok=True)
-    
-    config_file = os.path.join(config_dir, 'device.json')
-    if not os.path.exists(config_file):
-        default_config = {
-            "id": "1",
-            "name": "Dispositivo ZKTeco",
-            "ip_address": "192.168.1.100",
-            "port": 4370
-        }
+    try:
+        # Determinar directorio base
+        if hasattr(sys, '_MEIPASS'):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+        config_dir = os.path.join(base_dir, 'config')
+        os.makedirs(config_dir, exist_ok=True)
         
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(default_config, f, indent=2, ensure_ascii=False)
-        
-        print(f"Archivo de configuración creado: {config_file}")
+        config_file = os.path.join(config_dir, 'device.json')
+        if not os.path.exists(config_file):
+            default_config = {
+                "id": "1",
+                "name": "Dispositivo ZKTeco",
+                "ip_address": "192.168.1.100",
+                "port": 4370
+            }
+            
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, indent=2, ensure_ascii=False)
+            
+            print(f"✓ Archivo de configuración creado: {config_file}")
+        else:
+            print(f"✓ Archivo de configuración ya existe: {config_file}")
+            
         print("IMPORTANTE: Edite este archivo con los datos de su dispositivo")
+        return True
+        
+    except Exception as e:
+        print(f"Error creando configuración por defecto: {e}")
+        return False
 
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
-        # Sin argumentos, crear configuración por defecto
+        # Sin argumentos, mostrar ayuda y crear configuración
+        print("=== SERVICIO ZKTECO SYNC v1.2 ===")
+        print(f"WIN32 disponible: {WIN32_AVAILABLE}")
+        print(f"Flask disponible: {FLASK_AVAILABLE}")
+        print(f"ZK disponible: {ZK_AVAILABLE}")
+        print()
+        
         create_default_config()
+        
         print("\nUso:")
         print("  python zkteco_service.py install    - Instalar servicio")
         print("  python zkteco_service.py remove     - Desinstalar servicio")
         print("  python zkteco_service.py start      - Iniciar servicio")
         print("  python zkteco_service.py stop       - Detener servicio")
         print("  python zkteco_service.py debug      - Ejecutar en modo debug")
+        print("  python zkteco_service.py validate   - Validar instalación")
+        
     elif 'debug' in sys.argv:
         # Modo debug para pruebas
         print("=== MODO DEBUG ===")
+        if not WIN32_AVAILABLE:
+            print("ERROR: Librerías win32 no disponibles en modo debug")
+            print("Este modo simula el servicio pero requiere las librerías")
+            sys.exit(1)
+            
         service = ZKTecoService([])
         service.main()
+        
+    elif 'validate' in sys.argv:
+        # Validar instalación
+        print("=== VALIDACIÓN DE INSTALACIÓN ===")
+        print(f"WIN32 disponible: {WIN32_AVAILABLE}")
+        print(f"Flask disponible: {FLASK_AVAILABLE}")
+        print(f"ZK disponible: {ZK_AVAILABLE}")
+        
+        if WIN32_AVAILABLE and FLASK_AVAILABLE:
+            print("✓ Todas las dependencias críticas están disponibles")
+        else:
+            print("✗ Faltan dependencias críticas")
+            
+    elif 'install' in sys.argv:
+        # Instalación con validaciones
+        if install_service_with_validation():
+            print("✓ Instalación completada")
+        else:
+            print("✗ Error en la instalación")
+            sys.exit(1)
+            
     else:
-        # Comandos de servicio de Windows
+        # Comandos estándar de servicio de Windows
+        if not WIN32_AVAILABLE:
+            print("ERROR: Librerías win32 no disponibles")
+            print("Instale con: pip install pywin32")
+            sys.exit(1)
+            
         win32serviceutil.HandleCommandLine(ZKTecoService)
-├── build_exe.bat
-      @echo off
-setlocal enabledelayedexpansion
 
-echo ==========================================
-echo Construyendo ZKTeco Sync Application
-echo ==========================================
-echo.
-
-REM Verificar si Python está instalado
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: Python no está instalado o no está en el PATH
-    echo.
-    echo Instale Python desde: https://python.org/downloads/
-    echo Asegúrese de marcar "Add Python to PATH" durante la instalación
-    pause
-    exit /b 1
-)
-
-echo ✓ Python encontrado
-
-REM Verificar si PyInstaller está instalado
-python -c "import PyInstaller" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo PyInstaller no encontrado. Instalando...
-    pip install pyinstaller
-    if %errorlevel% neq 0 (
-        echo ERROR: No se pudo instalar PyInstaller
-        pause
-        exit /b 1
-    )
-)
-
-echo ✓ PyInstaller disponible
-
-REM Verificar dependencias principales
-echo Verificando dependencias...
-python -c "import tkinter, flask, flask_cors, win32serviceutil, win32service, win32event, servicemanager" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: Faltan dependencias requeridas
-    echo.
-    echo Instale las dependencias con:
-    echo pip install flask flask-cors pywin32 requests
-    echo.
-    echo Opcional (para funcionalidad ZKTeco):
-    echo pip install pyzk
-    pause
-    exit /b 1
-)
-
-echo ✓ Dependencias verificadas
-
-REM Limpiar directorio de distribución anterior
-if exist "dist" (
-    echo Limpiando directorio dist anterior...
-    rmdir /s /q dist
-)
-
-if exist "build" (
-    echo Limpiando directorio build anterior...
-    rmdir /s /q build
-)
-
-echo ✓ Directorios limpiados
-
-REM Crear directorio dist
-mkdir dist
-
-echo.
-echo ==========================================
-echo Construyendo aplicación GUI (main.py)
-echo ==========================================
-
-REM Construir aplicación GUI principal
-python -m PyInstaller ^
-    --onefile ^
-    --windowed ^
-    --name=ZKTeco-Sync ^
-    --icon=icon.ico ^
-    --add-data="*.bat;." ^
-    --hidden-import=tkinter ^
-    --hidden-import=tkinter.ttk ^
-    --hidden-import=flask ^
-    --hidden-import=flask_cors ^
-    --hidden-import=requests ^
-    --hidden-import=json ^
-    --hidden-import=threading ^
-    --hidden-import=socket ^
-    --hidden-import=datetime ^
-    --exclude-module=matplotlib ^
-    --exclude-module=numpy ^
-    --exclude-module=pandas ^
-    main.py
-
-if %errorlevel% neq 0 (
-    echo ERROR: Falló la construcción de la aplicación GUI
-    pause
-    exit /b 1
-)
-
-echo ✓ Aplicación GUI construida exitosamente
-
-echo.
-echo ==========================================
-echo Construyendo servicio Windows (zkteco_service.py)
-echo ==========================================
-
-REM Construir servicio de Windows
-python -m PyInstaller ^
-    --onefile ^
-    --console ^
-    --name=zkteco_service ^
-    --hidden-import=win32serviceutil ^
-    --hidden-import=win32service ^
-    --hidden-import=win32event ^
-    --hidden-import=servicemanager ^
-    --hidden-import=flask ^
-    --hidden-import=flask_cors ^
-    --hidden-import=json ^
-    --hidden-import=threading ^
-    --hidden-import=socket ^
-    --hidden-import=datetime ^
-    --hidden-import=time ^
-    --exclude-module=tkinter ^
-    --exclude-module=matplotlib ^
-    --exclude-module=numpy ^
-    --exclude-module=pandas ^
-    zkteco_service.py
-
-if %errorlevel% neq 0 (
-    echo ERROR: Falló la construcción del servicio
-    pause
-    exit /b 1
-)
-
-echo ✓ Servicio Windows construido exitosamente
-
-echo.
-echo ==========================================
-echo Organizando archivos de distribución
-echo ==========================================
-
-REM Crear estructura de directorios en dist
-mkdir "dist\logs" 2>nul
-mkdir "dist\config" 2>nul
-
-REM Copiar archivos de instalación
-copy "install_service.bat" "dist\" >nul
-copy "uninstall_service.bat" "dist\" >nul
-
-echo ✓ Scripts de instalación copiados
-
-REM Crear archivo de configuración por defecto
-echo Creando configuración por defecto...
-(
-echo {
-echo   "id": "1",
-echo   "name": "Dispositivo ZKTeco",
-echo   "ip_address": "192.168.1.100",
-echo   "port": 4370
-echo }
-) > "dist\config\device.json"
-
-echo ✓ Configuración por defecto creada
-
-REM Crear archivo README para la distribución
-echo Creando documentación...
-(
-echo ZKTeco Sync Application v1.1
-echo ============================
-echo.
-echo INSTALACIÓN:
-echo 1. Edite el archivo config\device.json con los datos de su dispositivo
-echo 2. Ejecute install_service.bat como Administrador para instalar el servicio
-echo 3. O ejecute ZKTeco-Sync.exe para usar la aplicación con interfaz gráfica
-echo.
-echo ARCHIVOS INCLUIDOS:
-echo - ZKTeco-Sync.exe: Aplicación con interfaz gráfica
-echo - zkteco_service.exe: Servicio de Windows
-echo - install_service.bat: Instalador del servicio
-echo - uninstall_service.bat: Desinstalador del servicio
-echo - config\device.json: Configuración del dispositivo
-echo - logs\: Directorio para logs del servicio
-echo.
-echo CONFIGURACIÓN:
-echo Edite config\device.json con:
-echo - ip_address: IP del dispositivo ZKTeco
-echo - port: Puerto ^(generalmente 4370^)
-echo - name: Nombre descriptivo del dispositivo
-echo.
-echo DEPENDENCIAS OPCIONALES:
-echo Si encuentra errores de conexión ZKTeco, instale:
-echo pip install pyzk
-echo.
-echo SOPORTE:
-echo - Aplicación GUI: Puerto 3322 ^(http://127.0.0.1:3322/estado^)
-echo - Servicio Windows: Puerto 3322 ^(http://127.0.0.1:3322/estado^)
-echo.
-echo LOGS:
-echo - Servicio: logs\service.log
-echo - Aplicación GUI: Log interno en la interfaz
-) > "dist\README.txt"
-
-echo ✓ Documentación creada
-
-REM Verificar que ambos ejecutables se crearon
-if not exist "dist\ZKTeco-Sync.exe" (
-    echo ERROR: No se generó ZKTeco-Sync.exe
-    pause
-    exit /b 1
-)
-
-if not exist "dist\zkteco_service.exe" (
-    echo ERROR: No se generó zkteco_service.exe
-    pause
-    exit /b 1
-)
-
-echo.
-echo ==========================================
-echo Verificando construcción
-echo ==========================================
-
-echo Contenido del directorio dist:
-dir "dist" /b
-
-echo.
-echo Tamaños de archivo:
-for %%f in ("dist\*.exe") do (
-    for /f "tokens=3" %%s in ('dir "%%f" ^| findstr /r "[0-9].*\.exe"') do (
-        echo   %%~nxf: %%s bytes
-    )
-)
-
-echo.
-echo ==========================================
-echo ✓ Construcción completada exitosamente
-echo ==========================================
-echo.
-echo Archivos generados en el directorio 'dist\':
-echo - ZKTeco-Sync.exe          ^(Aplicación GUI^)
-echo - zkteco_service.exe       ^(Servicio Windows^)
-echo - install_service.bat      ^(Instalador^)
-echo - uninstall_service.bat    ^(Desinstalador^)
-echo - config\device.json       ^(Configuración^)
-echo - logs\                    ^(Directorio de logs^)
-echo - README.txt               ^(Documentación^)
-echo.
-echo PRÓXIMOS PASOS:
-echo 1. Edite dist\config\device.json con los datos de su dispositivo
-echo 2. Para usar como servicio: Ejecute dist\install_service.bat como Admin
-echo 3. Para usar GUI: Ejecute dist\ZKTeco-Sync.exe
-echo.
-echo La aplicación estará disponible en: http://127.0.0.1:3322/estado
-echo.
-
-REM Limpiar archivos temporales de PyInstaller
-echo Limpiando archivos temporales...
-if exist "build" rmdir /s /q build >nul 2>&1
-if exist "*.spec" del "*.spec" >nul 2>&1
-
-echo ✓ Limpieza completada
-
-echo Presione cualquier tecla para continuar...
-pause >nul
-
-exit /b 0
-
-├── ZKTeco-Sync-installer.iss 
-    [Setup]
+y este es ZKTeco-Sync-installer.iss:
+[Setup]
 AppName=ZKTeco Sync
 AppVersion=1.1
 AppPublisher=Sistema de Asistencias
@@ -1122,7 +1205,7 @@ Name: "{group}\Desinstalar ZKTeco Sync"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\ZKTeco Sync"; Filename: "{app}\ZKTeco-Sync.exe"; Tasks: desktopicon
 
 [Run]
-; Ejecutar la aplicación al final (opcional, no marcado por defecto)
+; CAMBIO PRINCIPAL: Instalar servicio directamente desde Pascal, no desde BAT
 Filename: "{app}\ZKTeco-Sync.exe"; Description: "Ejecutar ZKTeco Sync"; Flags: nowait postinstall skipifsilent unchecked
 
 [UninstallDelete]
@@ -1130,78 +1213,358 @@ Type: filesandordirs; Name: "{app}\logs"
 Type: filesandordirs; Name: "{app}\config"
 
 [Code]
-function InitializeSetup(): Boolean;
+// FUNCIÓN MEJORADA: Verificar privilegios de administrador
+function IsAdmin(): Boolean;
+begin
+  Result := IsAdminLoggedOn or IsPowerUserLoggedOn;
+end;
+
+// FUNCIÓN CORREGIDA: Log detallado para debugging
+procedure LogInstallStep(Step: String; Success: Boolean; Details: String);
+var
+  LogFile: String;
+  LogContent: TStringList;
+  LogLine: String;
+begin
+  try
+    LogFile := ExpandConstant('{app}\logs\installer.log');
+    CreateDir(ExtractFileDir(LogFile));
+    
+    LogContent := TStringList.Create;
+    try
+      if FileExists(LogFile) then
+        LogContent.LoadFromFile(LogFile);
+      
+      // Línea simple sin timestamp
+      if Success then
+        LogLine := Step + ': SUCCESS'
+      else
+        LogLine := Step + ': FAILED';
+      
+      if Details <> '' then
+        LogLine := LogLine + ' - ' + Details;
+      
+      LogContent.Add(LogLine);
+      LogContent.SaveToFile(LogFile);
+    finally
+      LogContent.Free;
+    end;
+  except
+    // Fallar silenciosamente si no se puede escribir log
+  end;
+end;
+
+// FUNCIÓN CORREGIDA: Crear configuración por defecto
+function CreateDefaultDeviceConfig(): Boolean;
+var
+  ConfigDir, ConfigFile: String;
+  ConfigContent: TStringList;
+begin
+  Result := False;
+  try
+    ConfigDir := ExpandConstant('{app}\config');
+    ConfigFile := ConfigDir + '\device.json';
+    
+    // Crear directorio si no existe
+    if not DirExists(ConfigDir) then
+      CreateDir(ConfigDir);
+    
+    LogInstallStep('CreateConfigDir', DirExists(ConfigDir), ConfigDir);
+    
+    if not FileExists(ConfigFile) then
+    begin
+      ConfigContent := TStringList.Create;
+      try
+        ConfigContent.Add('{');
+        ConfigContent.Add('  "id": "1",');
+        ConfigContent.Add('  "name": "Dispositivo ZKTeco",');
+        ConfigContent.Add('  "ip_address": "192.168.1.100",');
+        ConfigContent.Add('  "port": 4370');
+        ConfigContent.Add('}');
+        
+        ConfigContent.SaveToFile(ConfigFile);
+        Result := FileExists(ConfigFile);
+        LogInstallStep('CreateDefaultConfig', Result, ConfigFile);
+      finally
+        ConfigContent.Free;
+      end;
+    end else begin
+      Result := True;
+      LogInstallStep('ConfigAlreadyExists', True, ConfigFile);
+    end;
+  except
+    LogInstallStep('CreateDefaultConfig', False, GetExceptionMessage);
+  end;
+end;
+
+// FUNCIÓN NUEVA: Verificar que el ejecutable del servicio existe
+function ValidateServiceExecutable(): Boolean;
+var
+  ServiceExe: String;
+begin
+  ServiceExe := ExpandConstant('{app}\zkteco_service.exe');
+  Result := FileExists(ServiceExe);
+  LogInstallStep('ValidateServiceExe', Result, ServiceExe);
+end;
+
+// FUNCIÓN NUEVA: Detener servicio existente de forma robusta
+function StopExistingService(): Boolean;
+var
+  ResultCode: Integer;
+  Attempts: Integer;
 begin
   Result := True;
+  LogInstallStep('StopExistingService', True, 'Starting...');
+  
+  // Detener el servicio si está ejecutándose
+  if Exec(ExpandConstant('{cmd}'), '/c net stop ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    LogInstallStep('NetStop', ResultCode = 0, 'Code: ' + IntToStr(ResultCode));
+  end;
+  
+  // Esperar hasta 10 segundos para que se detenga
+  Attempts := 0;
+  while (Attempts < 10) do
+  begin
+    Sleep(1000);
+    if Exec(ExpandConstant('{cmd}'), '/c sc query ZKTecoSync | findstr STOPPED', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      if ResultCode = 0 then
+      begin
+        LogInstallStep('ServiceStopped', True, 'After ' + IntToStr(Attempts + 1) + ' seconds');
+        Break;
+      end;
+    end;
+    Attempts := Attempts + 1;
+  end;
+end;
+
+// FUNCIÓN NUEVA: Eliminar servicio existente de forma robusta
+function RemoveExistingService(): Boolean;
+var
+  ResultCode: Integer;
+  ServiceExists: Boolean;
+begin
+  Result := True;
+  
+  // Verificar si el servicio existe
+  ServiceExists := False;
+  if Exec(ExpandConstant('{cmd}'), '/c sc query ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    ServiceExists := (ResultCode = 0);
+    LogInstallStep('CheckServiceExists', ServiceExists, 'Code: ' + IntToStr(ResultCode));
+  end;
+  
+  if ServiceExists then
+  begin
+    // Método 1: Usar el ejecutable del servicio
+    if Exec(ExpandConstant('{app}\zkteco_service.exe'), 'remove', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      LogInstallStep('ServiceRemoveMethod1', ResultCode = 0, 'Code: ' + IntToStr(ResultCode));
+      if ResultCode = 0 then
+      begin
+        Sleep(2000);
+        Exit;
+      end;
+    end;
+    
+    // Método 2: Usar sc delete como respaldo
+    if Exec(ExpandConstant('{cmd}'), '/c sc delete ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      LogInstallStep('ServiceRemoveMethod2', ResultCode = 0, 'Code: ' + IntToStr(ResultCode));
+    end;
+    
+    Sleep(3000); // Dar tiempo para que Windows procese la eliminación
+  end;
+end;
+
+// FUNCIÓN PRINCIPAL CORREGIDA: Instalar servicio con validaciones robustas
+function InstallZKTecoService(): Boolean;
+var
+  ResultCode: Integer;
+  ServiceInstalled, ServiceStarted: Boolean;
+  Attempts: Integer;
+begin
+  Result := False;
+  ServiceInstalled := False;
+  ServiceStarted := False;
+  
+  LogInstallStep('InstallService', True, 'Starting installation process...');
+  
+  try
+    // 1. Verificar privilegios
+    if not IsAdmin() then
+    begin
+      LogInstallStep('AdminCheck', False, 'Insufficient privileges');
+      Exit;
+    end;
+    LogInstallStep('AdminCheck', True, 'Administrator privileges confirmed');
+    
+    // 2. Validar que el ejecutable existe
+    if not ValidateServiceExecutable() then
+    begin
+      LogInstallStep('ValidateExe', False, 'Service executable not found');
+      Exit;
+    end;
+    
+    // 3. Crear directorios necesarios
+    CreateDir(ExpandConstant('{app}\logs'));
+    CreateDir(ExpandConstant('{app}\config'));
+    LogInstallStep('CreateDirectories', True, 'Logs and config directories created');
+    
+    // 4. Crear archivo de configuración por defecto
+    if not CreateDefaultDeviceConfig() then
+    begin
+      LogInstallStep('CreateConfig', False, 'Could not create default config');
+      // No es crítico, continuar
+    end;
+    
+    // 5. Detener servicio existente
+    StopExistingService();
+    
+    // 6. Eliminar servicio existente
+    RemoveExistingService();
+    
+    // 7. Instalar nuevo servicio
+    LogInstallStep('InstallNewService', True, 'Installing new service...');
+    if Exec(ExpandConstant('{app}\zkteco_service.exe'), 'install', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      ServiceInstalled := (ResultCode = 0);
+      LogInstallStep('ServiceInstall', ServiceInstalled, 'Code: ' + IntToStr(ResultCode));
+      
+      if ServiceInstalled then
+      begin
+        Sleep(2000); // Dar tiempo para que se registre el servicio
+        
+        // 8. Configurar inicio automático
+        if Exec(ExpandConstant('{cmd}'), '/c sc config ZKTecoSync start= auto', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+        begin
+          LogInstallStep('ConfigAutoStart', ResultCode = 0, 'Code: ' + IntToStr(ResultCode));
+        end;
+        
+        // 9. Configurar descripción
+        if Exec(ExpandConstant('{cmd}'), '/c sc description ZKTecoSync "Servicio de sincronización para dispositivos ZKTeco - API REST en puerto 3322"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+        begin
+          LogInstallStep('SetDescription', ResultCode = 0, 'Code: ' + IntToStr(ResultCode));
+        end;
+        
+        Sleep(1000);
+        
+        // 10. Iniciar servicio con reintentos
+        Attempts := 0;
+        while (Attempts < 3) and (not ServiceStarted) do
+        begin
+          if Exec(ExpandConstant('{cmd}'), '/c net start ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+          begin
+            ServiceStarted := (ResultCode = 0);
+            LogInstallStep('StartService', ServiceStarted, 'Attempt ' + IntToStr(Attempts + 1) + ', Code: ' + IntToStr(ResultCode));
+            
+            if ServiceStarted then
+            begin
+              Sleep(5000); // Dar tiempo para que el servicio se inicie completamente
+              Break;
+            end else begin
+              Sleep(2000); // Esperar antes del siguiente intento
+            end;
+          end;
+          Attempts := Attempts + 1;
+        end;
+        
+        Result := ServiceStarted;
+      end;
+    end else begin
+      LogInstallStep('ServiceInstall', False, 'Failed to execute install command');
+    end;
+    
+  except
+    LogInstallStep('InstallService', False, 'Exception: ' + GetExceptionMessage);
+    Result := False;
+  end;
+  
+  LogInstallStep('InstallServiceComplete', Result, 'Final result');
+end;
+
+// FUNCIÓN MEJORADA: Verificar estado del servicio
+function IsServiceRunning(): Boolean;
+var
+  ResultCode: Integer;
+  Attempts: Integer;
+begin
+  Result := False;
+  
+  // Intentar varias veces para dar tiempo al servicio
+  Attempts := 0;
+  while (Attempts < 5) and (not Result) do
+  begin
+    try
+      // Método 1: Verificar que el puerto esté escuchando
+      if Exec(ExpandConstant('{cmd}'), '/c netstat -ano | findstr ":3322.*LISTENING"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      begin
+        if ResultCode = 0 then
+        begin
+          Result := True;
+          LogInstallStep('ServiceRunningCheck', True, 'Port 3322 is listening');
+          Break;
+        end;
+      end;
+      
+      Sleep(2000);
+      Attempts := Attempts + 1;
+    except
+      // Continuar con el siguiente intento
+    end;
+  end;
+  
+  if not Result then
+    LogInstallStep('ServiceRunningCheck', False, 'Port 3322 not listening after 5 attempts');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  ResultCode: Integer;
+  ServiceSuccess: Boolean;
+  StatusMsg: String;
 begin
   if CurStep = ssPostInstall then
   begin
-    // Crear carpetas necesarias
-    CreateDir(ExpandConstant('{app}\logs'));
-    CreateDir(ExpandConstant('{app}\config'));
-    
-    // Crear archivo de configuración por defecto si no existe
-    if not FileExists(ExpandConstant('{app}\config\device.json')) then
-    begin
-      SaveStringToFile(ExpandConstant('{app}\config\device.json'),
-        '{' + #13#10 +
-        '  "id": "1",' + #13#10 +
-        '  "name": "Dispositivo ZKTeco",' + #13#10 +
-        '  "ip_address": "192.168.1.100",' + #13#10 +
-        '  "port": 4370' + #13#10 +
-        '}', False);
-    end;
-    
-    // Si se seleccionó instalar servicio, instalarlo automáticamente
     if IsTaskSelected('installservice') then
     begin
-      MsgBox('Instalando servicio ZKTeco Sync...' + #13#10 + #13#10 +
-             'El servicio se instalará automáticamente y se iniciará.' + #13#10 +
-             'Esto puede tomar unos momentos.',
-             mbInformation, MB_OK);
-             
-      // Ejecutar install_service.bat
-      if Exec(ExpandConstant('{app}\install_service.bat'), '', ExpandConstant('{app}'), 
-              SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      LogInstallStep('PostInstall', True, 'Starting service installation...');
+      
+      ServiceSuccess := InstallZKTecoService();
+      
+      if ServiceSuccess then
       begin
-        if ResultCode = 0 then
+        // Verificar que realmente esté ejecutándose
+        if IsServiceRunning() then
         begin
-          MsgBox('✓ Servicio ZKTeco Sync instalado e iniciado correctamente.' + #13#10 + #13#10 +
-                 'El servicio está ejecutándose en segundo plano y proporciona' + #13#10 +
-                 'una API REST en: http://127.0.0.1:3322' + #13#10 + #13#10 +
-                 'Puede abrir la aplicación GUI en cualquier momento para' + #13#10 +
-                 'monitorear el estado del servicio.',
-                 mbInformation, MB_OK);
-        end
-        else
+          StatusMsg := 'La instalación se completó correctamente.' + #13#10 + #13#10 +
+                      '✓ Servicio ZKTeco Sync instalado y ejecutándose' + #13#10 +
+                      '✓ API REST disponible en: http://127.0.0.1:3322' + #13#10 + #13#10 +
+                      'Para verificar el estado visite: http://127.0.0.1:3322/estado' + #13#10 + #13#10 +
+                      'IMPORTANTE: Configure su dispositivo editando:' + #13#10 +
+                      ExpandConstant('{app}\config\device.json');
+                      
+          LogInstallStep('InstallationComplete', True, 'Service running successfully');
+        end else
         begin
-          MsgBox('⚠️ Hubo un problema al instalar el servicio.' + #13#10 + #13#10 +
-                 'Código de error: ' + IntToStr(ResultCode) + #13#10 + #13#10 +
-                 'Puede intentar instalar manualmente ejecutando' + #13#10 +
-                 'install_service.bat como Administrador.',
-                 mbError, MB_OK);
+          StatusMsg := 'El servicio se instaló pero puede tardar en iniciar.' + #13#10 + #13#10 +
+                      'Espere unos segundos y verifique en: http://127.0.0.1:3322/estado' + #13#10 + #13#10 +
+                      'Si no funciona, ejecute "Instalar Servicio" desde el menú de inicio';
+          
+          LogInstallStep('InstallationComplete', False, 'Service installed but not running yet');
         end;
-      end
-      else
+      end else
       begin
-        MsgBox('❌ No se pudo ejecutar el instalador del servicio.' + #13#10 + #13#10 +
-               'Ejecute manualmente install_service.bat como Administrador.',
-               mbError, MB_OK);
+        StatusMsg := 'No se pudo instalar el servicio automáticamente.' + #13#10 + #13#10 +
+                    'Para instalarlo manualmente:' + #13#10 +
+                    '1. Ejecute "Instalar Servicio" desde el menú de inicio' + #13#10 +
+                    '2. Asegúrese de ejecutar como Administrador' + #13#10 + #13#10 +
+                    'Logs de instalación en: ' + ExpandConstant('{app}\logs\installer.log');
+        
+        LogInstallStep('InstallationComplete', False, 'Automatic installation failed');
       end;
-    end
-    else
-    begin
-      // Si no se instaló servicio, informar cómo hacerlo
-      MsgBox('Instalación completada.' + #13#10 + #13#10 +
-             'NOTA: No se instaló el servicio de Windows.' + #13#10 +
-             'Para usar todas las funcionalidades, ejecute' + #13#10 +
-             'install_service.bat como Administrador.',
-             mbInformation, MB_OK);
+      
+      MsgBox(StatusMsg, mbInformation, MB_OK);
     end;
   end;
 end;
@@ -1212,34 +1575,25 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
-    // Verificar si el servicio existe antes de preguntar
-    if (Exec(ExpandConstant('{cmd}'), '/c sc query ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) and (ResultCode = 0) then
+    if MsgBox('¿Desea eliminar también el servicio ZKTeco Sync?' + #13#10 + 
+              '(Recomendado para una desinstalación completa)', 
+              mbConfirmation, MB_YESNO) = IDYES then
     begin
-      if MsgBox('¿Desea eliminar también el servicio ZKTeco Sync?' + #13#10 + 
-                '(Recomendado para una desinstalación completa)', 
-                mbConfirmation, MB_YESNO) = IDYES then
+      // Detener servicio
+      Exec(ExpandConstant('{cmd}'), '/c net stop ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Sleep(3000);
+      
+      // Intentar eliminar usando el ejecutable
+      if FileExists(ExpandConstant('{app}\zkteco_service.exe')) then
       begin
-        // Detener servicio
-        Exec(ExpandConstant('{cmd}'), '/c net stop ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        Exec(ExpandConstant('{app}\zkteco_service.exe'), 'remove', 
+             ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
         Sleep(2000);
-        
-        // Intentar eliminar usando el ejecutable
-        if FileExists(ExpandConstant('{app}\zkteco_service.exe')) then
-        begin
-          Exec(ExpandConstant('{app}\zkteco_service.exe'), 'remove', 
-               ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
-        end;
-        
-        // Si falla, intentar eliminación manual
-        if ResultCode <> 0 then
-          Exec(ExpandConstant('{cmd}'), '/c sc delete ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-          
-        if ResultCode = 0 then
-          MsgBox('✓ Servicio eliminado correctamente.', mbInformation, MB_OK)
-        else
-          MsgBox('⚠️ Hubo un problema al eliminar el servicio.' + #13#10 +
-                 'Puede eliminarlo manualmente desde Servicios de Windows.', mbError, MB_OK);
       end;
+      
+      // Si falla, intentar eliminación manual
+      if ResultCode <> 0 then
+        Exec(ExpandConstant('{cmd}'), '/c sc delete ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end;
   end;
 end;
