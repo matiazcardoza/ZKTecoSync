@@ -1,298 +1,223 @@
 [Setup]
 AppName=ZKTeco Sync
 AppVersion=1.1
-AppPublisher=Sistema de Asistencias
+AppPublisher=Tu Empresa
+AppPublisherURL=https://www.tuempresa.com
+AppSupportURL=https://www.tuempresa.com/soporte
+AppUpdatesURL=https://www.tuempresa.com/actualizaciones
 DefaultDirName={autopf}\ZKTeco Sync
 DefaultGroupName=ZKTeco Sync
 AllowNoIcons=yes
-LicenseFile=LICENSE.txt
-InfoBeforeFile=README.txt
+LicenseFile=
 OutputDir=output
-OutputBaseFilename=ZKTeco-Sync-Setup-v1.1
+OutputBaseFilename=ZKTeco-Sync-Setup
+SetupIconFile=
 Compression=lzma
 SolidCompression=yes
-WizardStyle=modern
-PrivilegesRequired=admin
-SetupLogging=yes
+WizardImageFile=
+WizardSmallImageFile=
+ArchitecturesInstallIn64BitMode=x64
+UninstallDisplayIcon={app}\ZKTeco-Sync.exe
+UninstallDisplayName=ZKTeco Sync v1.1
+VersionInfoVersion=1.1.0.0
+VersionInfoCompany=Tu Empresa
+VersionInfoDescription=Sistema de sincronización ZKTeco
+VersionInfoCopyright=Copyright (C) 2025
+VersionInfoProductName=ZKTeco Sync
+VersionInfoProductVersion=1.1.0.0
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 
-[Tasks]
-Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; GroupDescription: "Accesos directos adicionales:"; Flags: unchecked
-Name: "installservice"; Description: "Instalar servicio de Windows (recomendado)"; GroupDescription: "Servicios:"; Flags: checkedonce
-
 [Files]
-; Archivo principal ejecutable (GUI)
+; Ejecutables principales
 Source: "dist\ZKTeco-Sync.exe"; DestDir: "{app}"; Flags: ignoreversion
-; Servicio de Windows
 Source: "dist\zkteco_service.exe"; DestDir: "{app}"; Flags: ignoreversion
-; Scripts de instalación/desinstalación del servicio
-Source: "install_service.bat"; DestDir: "{app}"; DestName: "install_service.bat"; Flags: ignoreversion
-Source: "uninstall_service.bat"; DestDir: "{app}"; DestName: "uninstall_service.bat"; Flags: ignoreversion
-; Documentación
-Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion
-Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
+
+; Scripts de manejo del servicio (versiones interactivas)
+Source: "scripts\install_service.bat"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "scripts\start_service.bat"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "scripts\stop_service.bat"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "scripts\uninstall_service.bat"; DestDir: "{app}\scripts"; Flags: ignoreversion
+
+; Scripts silenciosos para instalación/desinstalación
+Source: "scripts\start_service.bat"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "scripts\stop_service.bat"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\ZKTeco Sync"; Filename: "{app}\ZKTeco-Sync.exe"
-Name: "{group}\Instalar Servicio"; Filename: "{app}\install_service.bat"; IconFilename: "{sys}\shell32.dll"; IconIndex: 21
-Name: "{group}\Desinstalar Servicio"; Filename: "{app}\uninstall_service.bat"; IconFilename: "{sys}\shell32.dll"; IconIndex: 131
-Name: "{group}\Verificar Estado"; Filename: "http://127.0.0.1:3322/estado"; IconFilename: "{sys}\shell32.dll"; IconIndex: 14
-Name: "{group}\Desinstalar ZKTeco Sync"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\ZKTeco Sync"; Filename: "{app}\ZKTeco-Sync.exe"; Tasks: desktopicon
+; Accesos directos en el menú inicio
+Name: "{group}\ZKTeco Sync"; Filename: "{app}\ZKTeco-Sync.exe"; WorkingDir: "{app}"; Comment: "Aplicación principal ZKTeco Sync"
+Name: "{group}\Iniciar Servicio ZKTeco"; Filename: "{app}\scripts\start_service.bat"; WorkingDir: "{app}"; Comment: "Iniciar servicio ZKTeco"
+Name: "{group}\Detener Servicio ZKTeco"; Filename: "{app}\scripts\stop_service.bat"; WorkingDir: "{app}"; Comment: "Detener servicio ZKTeco"
+Name: "{group}\Desinstalar ZKTeco Sync"; Filename: "{uninstallexe}"; Comment: "Desinstalar ZKTeco Sync"
+
+; Accesos directos en el escritorio (opcional)
+Name: "{autodesktop}\ZKTeco Sync"; Filename: "{app}\ZKTeco-Sync.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "Crear acceso directo en el &escritorio"; GroupDescription: "Accesos directos adicionales:"
+Name: "startupservice"; Description: "Iniciar servicio automáticamente con Windows"; GroupDescription: "Opciones de servicio:"
 
 [Run]
-Filename: "{app}\ZKTeco-Sync.exe"; Description: "Ejecutar ZKTeco Sync"; Flags: nowait postinstall skipifsilent unchecked
+; NO ejecutar scripts que requieren interacción durante la instalación
+; En su lugar, usar scripts silenciosos
+
+; Opción para ejecutar la aplicación al finalizar la instalación
+Filename: "{app}\ZKTeco-Sync.exe"; Description: "Abrir ZKTeco Sync"; Flags: nowait postinstall skipifsilent; Check: IsServiceRunning
+
+[UninstallRun]
+; Detener servicio usando script silencioso
+Filename: "{app}\scripts\stop_service.bat"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated
+; Eliminar del registro de inicio automático
+Filename: "reg"; Parameters: "delete ""HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"" /v ""ZKTecoService"" /f"; Flags: runhidden
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\logs"
-Type: filesandordirs; Name: "{app}\config"
 
 [Code]
-// Función para logging simple (sin timestamp para evitar errores)
-procedure LogMessage(Msg: String);
-var
-  LogFile: String;
-  LogContent: TStringList;
-begin
-  try
-    LogFile := ExpandConstant('{app}\logs\installer.log');
-    CreateDir(ExtractFileDir(LogFile));
-    
-    LogContent := TStringList.Create;
-    try
-      if FileExists(LogFile) then
-        LogContent.LoadFromFile(LogFile);
-      
-      LogContent.Add(Msg);
-      LogContent.SaveToFile(LogFile);
-    finally
-      LogContent.Free;
-    end;
-  except
-    // Ignorar errores de logging
-  end;
-end;
-
-// Crear configuración por defecto
-procedure CreateDefaultConfig();
-var
-  ConfigDir, ConfigFile: String;
-  ConfigContent: TStringList;
-begin
-  try
-    ConfigDir := ExpandConstant('{app}\config');
-    ConfigFile := ConfigDir + '\device.json';
-    
-    CreateDir(ConfigDir);
-    
-    if not FileExists(ConfigFile) then
-    begin
-      ConfigContent := TStringList.Create;
-      try
-        ConfigContent.Add('{');
-        ConfigContent.Add('  "id": "1",');
-        ConfigContent.Add('  "name": "Dispositivo ZKTeco",');
-        ConfigContent.Add('  "ip_address": "192.168.1.100",');
-        ConfigContent.Add('  "port": 4370');
-        ConfigContent.Add('}');
-        
-        ConfigContent.SaveToFile(ConfigFile);
-        LogMessage('Configuración por defecto creada');
-      finally
-        ConfigContent.Free;
-      end;
-    end;
-  except
-    LogMessage('Error creando configuración: ' + GetExceptionMessage);
-  end;
-end;
-
-// Función simplificada para instalar el servicio
-function InstallService(): Boolean;
-var
-  ResultCode: Integer;
-  ServiceExe: String;
-begin
-  Result := False;
-  ServiceExe := ExpandConstant('{app}\zkteco_service.exe');
-  
-  LogMessage('Iniciando instalación del servicio...');
-  
-  // Verificar que el ejecutable existe
-  if not FileExists(ServiceExe) then
-  begin
-    LogMessage('ERROR: No se encuentra el ejecutable del servicio');
-    Exit;
-  end;
-  
-  // Crear directorios necesarios
-  CreateDir(ExpandConstant('{app}\logs'));
-  CreateDir(ExpandConstant('{app}\config'));
-  CreateDefaultConfig();
-  
-  // Detener servicio existente si está corriendo
-  LogMessage('Deteniendo servicio existente...');
-  Exec(ExpandConstant('{cmd}'), '/c net stop ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(2000);
-  
-  // Remover servicio existente
-  LogMessage('Removiendo servicio existente...');
-  Exec(ServiceExe, 'remove', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(2000);
-  
-  // Instalar servicio usando Python
-  LogMessage('Instalando servicio...');
-  if Exec(ServiceExe, 'install', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-  begin
-    if ResultCode = 0 then
-    begin
-      LogMessage('Servicio instalado correctamente');
-      Sleep(2000);
-      
-      // Configurar inicio automático
-      Exec(ExpandConstant('{cmd}'), '/c sc config ZKTecoSync start= auto', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      LogMessage('Configuración de inicio automático: ' + IntToStr(ResultCode));
-      
-      // Iniciar servicio usando Python
-      LogMessage('Iniciando servicio...');
-      if Exec(ServiceExe, 'start', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-      begin
-        if ResultCode = 0 then
-        begin
-          LogMessage('Servicio iniciado correctamente');
-          Result := True;
-        end else
-        begin
-          LogMessage('Error iniciando servicio, código: ' + IntToStr(ResultCode));
-        end;
-      end else
-      begin
-        LogMessage('Error ejecutando comando de inicio');
-      end;
-    end else
-    begin
-      LogMessage('Error instalando servicio, código: ' + IntToStr(ResultCode));
-    end;
-  end else
-  begin
-    LogMessage('Error ejecutando comando de instalación');
-  end;
-end;
-
-// Verificar si el servicio está corriendo
+// Función para verificar si el servicio ya está ejecutándose
 function IsServiceRunning(): Boolean;
 var
   ResultCode: Integer;
-  Attempts: Integer;
 begin
   Result := False;
-  Attempts := 0;
-  
-  while (Attempts < 10) and (not Result) do
+  if Exec('tasklist', '/FI "IMAGENAME eq zkteco_service.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
-    // Verificar puerto 3322
-    if Exec(ExpandConstant('{cmd}'), 
-           '/c netstat -ano | findstr ":3322.*LISTENING"', 
-           '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    begin
-      if ResultCode = 0 then
-      begin
-        Result := True;
-        LogMessage('Servicio verificado - puerto 3322 activo');
-        Break;
-      end;
-    end;
-    
-    Sleep(3000);
-    Attempts := Attempts + 1;
+    Result := (ResultCode = 0);
   end;
-  
-  if not Result then
-    LogMessage('Servicio no responde en puerto 3322 después de 30 segundos');
 end;
 
-// Evento principal de instalación
+// Función para iniciar servicio silenciosamente
+function StartService(): Boolean;
+var
+  ResultCode: Integer;
+  ScriptPath: String;
+begin
+  Result := False;
+  ScriptPath := ExpandConstant('{app}\scripts\start_service.bat');
+  
+  if Exec(ScriptPath, '', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Result := (ResultCode = 0);
+  end;
+end;
+
+// Función para detener servicio silenciosamente
+function StopService(): Boolean;
+var
+  ResultCode: Integer;
+  ScriptPath: String;
+begin
+  Result := False;
+  ScriptPath := ExpandConstant('{app}\scripts\stop_service.bat'); // Corregido: eliminado el "_" extra
+  
+  if FileExists(ScriptPath) then
+  begin
+    if Exec(ScriptPath, '', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      Result := True; // Consideramos éxito independientemente del código de salida
+    end;
+  end;
+end;
+
+// Función que se ejecuta antes de la instalación
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer; // ← AGREGADO: Declaración de variable faltante
+begin
+  Result := True;
+  
+  // Verificar si hay una instalación previa ejecutándose
+  if IsServiceRunning() then
+  begin
+    if MsgBox('El servicio ZKTeco está actualmente ejecutándose. ¿Desea detenerlo para continuar con la instalación?', 
+              mbConfirmation, MB_YESNO) = IDYES then
+    begin
+      // Intentar detener el servicio forzadamente
+      Exec('taskkill', '/F /IM "zkteco_service.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Sleep(2000); // Esperar 2 segundos
+    end
+    else
+    begin
+      Result := False;
+    end;
+  end;
+end;
+
+// Función que se ejecuta al inicio de la desinstalación
+function InitializeUninstall(): Boolean;
+begin
+  Result := True;
+  
+  // Detener servicio silenciosamente
+  if IsServiceRunning() then
+  begin
+    StopService();
+  end;
+end;
+
+// Configurar el progreso y ejecutar acciones post-instalación
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  InstallSuccess: Boolean;
-  StatusMsg: String;
+  ServiceStarted: Boolean;
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
-    if IsTaskSelected('installservice') then
+    // Crear directorio de logs
+    CreateDir(ExpandConstant('{app}\logs'));
+    
+    // Configurar inicio automático si se seleccionó
+    if IsTaskSelected('startupservice') then
     begin
-      LogMessage('=== INICIO INSTALACIÓN SERVICIO ===');
+      RegWriteStringValue(HKLM, 
+        'SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 
+        'ZKTecoService', 
+        ExpandConstant('"{app}\zkteco_service.exe" start'));
+    end;
+    
+    // Iniciar servicio silenciosamente
+    ServiceStarted := StartService();
+    
+    // Esperar un momento para que el servicio se inicie completamente
+    if ServiceStarted then
+    begin
+      Sleep(3000); // Esperar 3 segundos
       
-      InstallSuccess := InstallService();
-      
-      if InstallSuccess then
+      // Verificar nuevamente si está ejecutándose
+      if IsServiceRunning() then
       begin
-        LogMessage('Verificando estado del servicio...');
-        // Dar tiempo adicional para que el servicio se inicie
-        Sleep(5000);
-        
-        if IsServiceRunning() then
-        begin
-          StatusMsg := 'Instalación completada exitosamente!' + #13#10 + #13#10 +
-                      '✓ Servicio ZKTeco Sync instalado' + #13#10 +
-                      '✓ Servicio iniciado correctamente' + #13#10 +
-                      '✓ API REST disponible en: http://127.0.0.1:3322' + #13#10 + #13#10 +
-                      'Verificar estado: http://127.0.0.1:3322/estado' + #13#10 + #13#10 +
-                      'Configurar dispositivo en:' + #13#10 +
-                      ExpandConstant('{app}\config\device.json');
-          LogMessage('INSTALACIÓN EXITOSA - Servicio funcionando');
-        end else
-        begin
-          StatusMsg := 'Servicio instalado pero no responde.' + #13#10 + #13#10 +
-                      'El servicio puede tardar unos minutos en iniciarse.' + #13#10 +
-                      'Verifique en: http://127.0.0.1:3322/estado' + #13#10 + #13#10 +
-                      'Si no funciona, use "Instalar Servicio" del menú inicio.';
-          LogMessage('INSTALACIÓN PARCIAL - Servicio no responde');
-        end;
-      end else
-      begin
-        StatusMsg := 'No se pudo instalar el servicio automáticamente.' + #13#10 + #13#10 +
-                    'Instalación manual:' + #13#10 +
-                    '1. Abrir "Instalar Servicio" del menú inicio' + #13#10 +
-                    '2. Ejecutar como Administrador' + #13#10 + #13#10 +
-                    'Log de errores: ' + ExpandConstant('{app}\logs\installer.log');
-        LogMessage('INSTALACIÓN FALLIDA');
+        // El servicio se inició correctamente
+        // No mostrar mensaje aquí, se mostrará en CurPageChanged
       end;
-      
-      MsgBox(StatusMsg, mbInformation, MB_OK);
-      LogMessage('=== FIN INSTALACIÓN ===');
     end;
   end;
 end;
 
-// Desinstalación
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  ResultCode: Integer;
-  ServiceExe: String;
+// Personalizar la página de finalización
+procedure CurPageChanged(CurPage: Integer);
 begin
-  if CurUninstallStep = usUninstall then
+  if CurPage = wpFinished then
   begin
-    if MsgBox('¿Desea eliminar también el servicio ZKTeco Sync?', 
-              mbConfirmation, MB_YESNO) = IDYES then
+    // Verificar estado del servicio y mostrar información
+    if IsServiceRunning() then
     begin
-      ServiceExe := ExpandConstant('{app}\zkteco_service.exe');
-      
-      // Usar el ejecutable Python para detener y remover
-      if FileExists(ServiceExe) then
-      begin
-        Exec(ServiceExe, 'stop', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
-        Sleep(3000);
-        Exec(ServiceExe, 'remove', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      end else
-      begin
-        // Método manual como respaldo
-        Exec(ExpandConstant('{cmd}'), '/c net stop ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-        Sleep(2000);
-        Exec(ExpandConstant('{cmd}'), '/c sc delete ZKTecoSync', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      end;
+      MsgBox('Instalación completada exitosamente.' + #13#10 + #13#10 +
+             '✓ El servicio ZKTeco se ha iniciado correctamente' + #13#10 +
+             '✓ Puerto del servicio: 3322' + #13#10 +
+             '✓ URL de estado: http://127.0.0.1:3322/estado' + #13#10 + #13#10 +
+             'Puede administrar el servicio desde el menú de inicio.' + #13#10 +
+             'La aplicación principal se puede ejecutar independientemente.', 
+             mbInformation, MB_OK);
+    end
+    else
+    begin
+      MsgBox('Instalación completada.' + #13#10 + #13#10 +
+             '⚠ El servicio no se pudo iniciar automáticamente' + #13#10 +
+             'Puede iniciarlo manualmente desde el menú de inicio.' + #13#10 + #13#10 +
+             'Puerto configurado: 3322' + #13#10 +
+             'Consulte los logs en: ' + ExpandConstant('{app}\logs'), 
+             mbInformation, MB_OK);
     end;
   end;
 end;

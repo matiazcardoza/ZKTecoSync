@@ -8,13 +8,7 @@ import requests
 import sys
 import argparse
 import os
-import socket
 from urllib.parse import urljoin
-from flask import Flask, jsonify, request
-# Importaciones para Flask
-from flask import Flask, jsonify
-from flask_cors import CORS
-
 
 try:
     from zk import ZK
@@ -34,11 +28,6 @@ class ZKTecoApp:
         self.device = None
         self.is_connected = False
         
-        # Variables para el servidor Flask
-        self.flask_app = None
-        self.flask_thread = None
-        self.service_running = False
-
         # OPTIMIZADO: Parsing rápido de parámetros
         self.system_params = self.parse_system_params_fast()
         
@@ -46,124 +35,11 @@ class ZKTecoApp:
         self.device_info = None
         self.current_device_id = None
         
-        # Verificar si el servicio ya está ejecutándose
-        self.check_service_status()
-        
-        # Solo iniciar servidor Flask si el servicio NO está corriendo
-        if not self.service_running:
-            self.init_flask_server()
-        
         self.setup_ui()
         
         if not ZK_AVAILABLE:
             self.log_text.insert(tk.END, "ADVERTENCIA: Librería 'pyzk' no encontrada.\n")
             self.log_text.insert(tk.END, "Instalar con: pip install pyzk\n\n")
-
-    def check_service_status(self):
-        """Verificar si el servicio ya está ejecutándose en el puerto 3322"""
-        try:
-            # Intentar hacer una petición al servicio
-            response = requests.get('http://127.0.0.1:3322/estado', timeout=2)
-            if response.status_code == 200:
-                data = response.json()
-                # Verificar si es el servicio (no la aplicación GUI)
-                if data.get('tipo') == 'servicio_windows':
-                    self.service_running = True
-                    print("Servicio ZKTeco detectado ejecutándose")
-                    return True
-        except:
-            pass
-        
-        # También verificar si el puerto está en uso
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                result = s.connect_ex(('127.0.0.1', 3322))
-                if result == 0:
-                    self.service_running = True
-                    print("Puerto 3322 está en uso (posiblemente por el servicio)")
-                    return True
-        except:
-            pass
-        
-        self.service_running = False
-        return False
-
-    def init_flask_server(self):
-        """Inicializar servidor Flask para verificación remota"""
-        try:
-            self.flask_app = Flask(__name__)
-            CORS(self.flask_app)
-            
-            # Ruta para verificar estado de la aplicación
-            @self.flask_app.route('/estado', methods=['GET'])
-            def estado():
-                return jsonify({
-                    'status': 'zkteco activo',
-                    'instalado': True,
-                    'version': '1.1',
-                    'tipo': 'aplicacion_gui',
-                    'conectado': self.is_connected,
-                    'timestamp': datetime.now().isoformat()
-                })
-            
-            @self.flask_app.route('/info', methods=['GET'])
-            def info():
-                device_info = {}
-                if self.system_params:
-                    device_info = {
-                        'dispositivo': self.system_params.get('name', 'N/A'),
-                        'ip': self.system_params.get('ip_address', 'N/A'),
-                        'puerto': self.system_params.get('port', 'N/A')
-                    }
-                
-                return jsonify({
-                    'aplicacion': 'ZKTeco Sync GUI',
-                    'version': '1.1',
-                    'estado': 'activo',
-                    'tipo': 'aplicacion_gui',
-                    'dispositivo_configurado': bool(self.system_params),
-                    'dispositivo_conectado': self.is_connected,
-                    'device_info': device_info
-                })
-            
-            # Ruta para verificar conectividad con dispositivo
-            @self.flask_app.route('/ping-device', methods=['GET'])
-            def ping_device():
-                return jsonify({
-                    'dispositivo_conectado': self.is_connected,
-                    'puede_sincronizar': self.is_connected and bool(self.system_params)
-                })
-            
-            # NUEVA RUTA: Cerrar servidor
-            @self.flask_app.route('/shutdown', methods=['POST'])
-            def shutdown():
-                func = request.environ.get('werkzeug.server.shutdown')
-                if func is None:
-                    raise RuntimeError('Not running with the Werkzeug Server')
-                func()
-                return jsonify({'message': 'Server shutting down...'})
-            
-            def iniciar_servidor():
-                try:
-                    # CAMBIO CLAVE: daemon=False para que persista
-                    self.flask_app.run(
-                        port=3322, 
-                        host='127.0.0.1', 
-                        debug=False, 
-                        use_reloader=False,
-                        threaded=True
-                    )
-                except Exception as e:
-                    print(f"Error iniciando servidor Flask: {e}")
-            
-            # CAMBIO CLAVE: daemon=False
-            self.flask_thread = threading.Thread(target=iniciar_servidor, daemon=False)
-            self.flask_thread.start()
-            
-            print("Servidor Flask iniciado en http://127.0.0.1:3322")
-            
-        except Exception as e:
-            print(f"Error configurando servidor Flask: {e}")
 
     def parse_system_params_fast(self):
         """Parsing optimizado de parámetros del sistema"""
@@ -228,21 +104,6 @@ class ZKTecoApp:
             error_label = ttk.Label(config_frame, text="No se puede continuar sin parámetros del dispositivo", foreground='red')
             error_label.grid(row=0, column=0, columnspan=2)
 
-        # Mostrar información del servidor Flask
-        server_frame = ttk.LabelFrame(main_frame, text="Estado del Servidor", padding="10")
-        server_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        if self.service_running:
-            ttk.Label(server_frame, text="Estado:").grid(row=0, column=0, sticky=tk.W)
-            ttk.Label(server_frame, text="Servicio de Windows ejecutándose", font=('Arial', 9, 'bold'), foreground='green').grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
-            ttk.Label(server_frame, text="URL:").grid(row=1, column=0, sticky=tk.W)
-            ttk.Label(server_frame, text="http://127.0.0.1:3322/estado", font=('Arial', 9)).grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
-        else:
-            ttk.Label(server_frame, text="Estado:").grid(row=0, column=0, sticky=tk.W)
-            ttk.Label(server_frame, text="Aplicación GUI activa", font=('Arial', 9, 'bold'), foreground='blue').grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
-            ttk.Label(server_frame, text="URL:").grid(row=1, column=0, sticky=tk.W)
-            ttk.Label(server_frame, text="http://127.0.0.1:3322/estado", font=('Arial', 9)).grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
-
         # Timeout
         ttk.Label(config_frame, text="Timeout (s):").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
         self.timeout_var = tk.StringVar(value="5")
@@ -251,7 +112,7 @@ class ZKTecoApp:
 
         # Botones de conexión
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
+        button_frame.grid(row=1, column=0, columnspan=2, pady=(0, 10))
         
         # Solo habilitar botones si tenemos parámetros
         button_state = "normal" if self.system_params else "disabled"
@@ -267,7 +128,7 @@ class ZKTecoApp:
         
         # Indicador de estado
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=3, column=0, columnspan=2, pady=(0, 10))
+        status_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
         
         ttk.Label(status_frame, text="Estado:").grid(row=0, column=0, padx=(0, 10))
         self.status_var = tk.StringVar(value="Desconectado")
@@ -276,14 +137,14 @@ class ZKTecoApp:
         
         # Botón de extracción de asistencias únicamente
         data_frame = ttk.LabelFrame(main_frame, text="Extracción y Sincronización", padding="10")
-        data_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        data_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         self.extract_attendance_btn = ttk.Button(data_frame, text="Extraer y Enviar Asistencias", command=self.extract_attendance, state="disabled")
         self.extract_attendance_btn.grid(row=0, column=0)
         
         # Log de eventos
         log_frame = ttk.LabelFrame(main_frame, text="Log de Eventos", padding="10")
-        log_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        log_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
         # Texto con scrollbar
         log_scroll_frame = ttk.Frame(log_frame)
@@ -301,7 +162,7 @@ class ZKTecoApp:
         
         # Configurar weights para redimensionamiento
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(5, weight=1)
+        main_frame.rowconfigure(4, weight=1)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         log_scroll_frame.columnconfigure(0, weight=1)
@@ -313,16 +174,10 @@ class ZKTecoApp:
         # Log inicial - OPTIMIZADO
         self.log("Aplicación iniciada - Solo sincronización de asistencias")
         
-        if self.service_running:
-            self.log("NOTA: Servicio ZKTeco detectado ejecutándose")
-            self.log("La aplicación GUI funciona en modo complementario")
-        else:
-            self.log("Servidor Flask iniciado en puerto 3322")
-        
         if ZK_AVAILABLE:
             self.log("Librería ZK cargada correctamente")
         else:
-            self.log("ADVERTENCIA: Instalar con 'pip install pyzk requests flask flask-cors'")
+            self.log("ADVERTENCIA: Instalar con 'pip install pyzk requests'")
         
         # Log de parámetros - SIMPLIFICADO
         if self.system_params:
@@ -597,24 +452,6 @@ def main():
     def on_closing():
         if app.is_connected:
             app.disconnect_device()
-        
-        # NUEVO: Mostrar opción para mantener servidor activo
-        if not app.service_running and app.flask_thread and app.flask_thread.is_alive():
-            result = messagebox.askyesno(
-                "Cerrar Aplicación", 
-                "¿Desea mantener el servidor activo en segundo plano?\n\n" +
-                "Sí: El servidor seguirá ejecutándose (puerto 3322)\n" +
-                "No: Cerrar completamente la aplicación"
-            )
-            
-            if not result:  # Usuario eligió "No" - cerrar todo
-                try:
-                    # Intentar cerrar el servidor Flask
-                    import requests
-                    requests.post('http://127.0.0.1:3322/shutdown', timeout=2)
-                except:
-                    pass
-        
         root.destroy()
     
     root.protocol("WM_DELETE_WINDOW", on_closing)

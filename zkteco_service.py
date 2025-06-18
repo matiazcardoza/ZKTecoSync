@@ -1,148 +1,372 @@
-import threading
-import socket
-import requests
+#!/usr/bin/env python3
+"""
+ZKTeco Service - Servicio de consola mejorado para instalación silenciosa
+Uso: 
+    python zkteco_service.py start    - Iniciar servicio
+    python zkteco_service.py stop     - Detener servicio
+"""
+
 import sys
+import time
+import signal
+import threading
+import requests
+import socket
+import os
+import subprocess
+import json
 from datetime import datetime
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+import argparse
+import logging
 
-class ZKTecoServer:
+class ZKTecoService:
     def __init__(self):
         self.flask_app = None
         self.flask_thread = None
-        self.service_running = False
+        self.running = False
+        self.port = 3322
+        self.host = "127.0.0.1"
+        self.start_time = None
         
-        # Verificar si el servicio ya está ejecutándose
-        self.check_service_status()
+        # Variable para control del servicio
+        self.shutdown_event = threading.Event()
         
-        # Solo iniciar servidor Flask si el servicio NO está corriendo
-        if not self.service_running:
-            self.init_flask_server()
-        else:
-            print("Servicio ZKTeco ya está ejecutándose en puerto 3322")
-
-    def check_service_status(self):
-        """Verificar si el servicio ya está ejecutándose en el puerto 3322"""
+        # Configurar logging mínimo
+        self.setup_logging()
+        
+        # Detectar si estamos en un instalador
+        self.is_installer_mode = self.detect_installer_mode()
+        
+    def detect_installer_mode(self):
+        """Detectar si estamos siendo ejecutados desde un instalador"""
+        # Verificar variables de entorno del instalador
+        installer_vars = ['INNO_SETUP', 'SETUP_RUNNING', 'TEMP']
+        
+        # Si hay procesos de instalador ejecutándose
         try:
-            # Intentar hacer una petición al servicio
-            response = requests.get('http://127.0.0.1:3322/estado', timeout=2)
-            if response.status_code == 200:
-                data = response.json()
-                # Verificar si es el servicio (no la aplicación GUI)
-                if data.get('tipo') == 'servicio_windows':
-                    self.service_running = True
-                    print("Servicio ZKTeco detectado ejecutándose")
+            import psutil
+            for proc in psutil.process_iter(['name']):
+                proc_name = proc.info['name'].lower()
+                if any(installer in proc_name for installer in ['setup', 'install', 'inno']):
                     return True
         except:
             pass
+            
+        # Verificar si el directorio padre contiene archivos de instalación
+        try:
+            parent_dir = os.path.dirname(os.path.abspath(__file__))
+            files = os.listdir(parent_dir)
+            installer_files = [f for f in files if any(ext in f.lower() for ext in ['.iss', 'setup', 'install'])]
+            if installer_files:
+                return True
+        except:
+            pass
+            
+        return False
         
-        # También verificar si el puerto está en uso
+    def setup_logging(self):
+        """Configurar logging básico"""
+        # Desactivar logs de Flask
+        log = logging.getLogger('werkzeug')
+        log.setLevel(logging.ERROR)
+        
+        # Configurar logger principal
+        logging.basicConfig(level=logging.ERROR)
+        self.logger = logging.getLogger(__name__)
+    
+    def check_port_available(self, port):
+        """Verificar si el puerto está disponible"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                result = s.connect_ex(('127.0.0.1', 3322))
-                if result == 0:
-                    self.service_running = True
-                    print("Puerto 3322 está en uso (posiblemente por el servicio)")
-                    return True
+                s.bind((self.host, port))
+                return True
         except:
-            pass
-        
-        self.service_running = False
-        return False
-
+            return False
+    
     def init_flask_server(self):
-        """Inicializar servidor Flask para verificación remota"""
+        """Inicializar servidor Flask básico"""
+        self.flask_app = Flask(__name__)
+        CORS(self.flask_app)
+        
+        # Suprimir logs de Flask completamente
+        import logging
+        log = logging.getLogger('werkzeug')
+        log.setLevel(logging.ERROR)
+        
+        @self.flask_app.route('/estado', methods=['GET'])
+        def estado():
+            return jsonify({
+                'status': 'zkteco servicio activo',
+                'instalado': True,
+                'version': '1.0',
+                'tipo': 'servicio_windows',
+                'timestamp': datetime.now().isoformat(),
+                'uptime': int(time.time() - self.start_time) if self.start_time else 0,
+                'installer_mode': self.is_installer_mode
+            })
+        
+        @self.flask_app.route('/execute-sync', methods=['POST'])
+        def execute_sync():
+            """Ejecuta la sincronización con parámetros del dispositivo"""
+            try:
+                # Obtener datos del dispositivo
+                device_data = request.get_json()
+                if not device_data:
+                    return jsonify({'success': False, 'message': 'No se recibieron datos'}), 400
+
+                # Validar campos requeridos
+                required_fields = ['id', 'name', 'ip_address', 'port']
+                for field in required_fields:
+                    if field not in device_data:
+                        return jsonify({'success': False, 'message': f'Campo requerido faltante: {field}'}), 400
+
+                # Buscar ejecutable
+                app_path = os.path.join(os.path.dirname(__file__), 'ZKTeco-Sync.exe')
+                if not os.path.exists(app_path):
+                    app_path = 'C:\\Program Files\\ZKTeco Sync\\ZKTeco-Sync.exe'
+                if not os.path.exists(app_path):
+                    return jsonify({'success': False, 'message': 'ZKTeco-Sync no encontrada'}), 404
+
+                # Ejecutar aplicación con parámetros
+                params = json.dumps(device_data, ensure_ascii=False)
+                
+                # Debug - log de los parámetros enviados (solo si no está en modo instalador)
+                if not self.is_installer_mode:
+                    print(f"Ejecutando: {app_path}")
+                    print(f"Parámetros: {params}")
+                
+                subprocess.Popen(
+                    [app_path, '--params-system', params],
+                    shell=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                )
+                
+                return jsonify({
+                    'success': True, 
+                    'message': 'Sincronización iniciada',
+                    'device_info': {
+                        'id': device_data['id'],
+                        'name': device_data['name'],
+                        'ip': device_data['ip_address'],
+                        'port': device_data['port']
+                    }
+                })
+                
+            except Exception as e:
+                error_msg = f'Error ejecutando sincronización: {str(e)}'
+                if not self.is_installer_mode:
+                    print(error_msg)
+                return jsonify({'success': False, 'message': error_msg}), 500
+        
+        @self.flask_app.route('/shutdown', methods=['POST'])
+        def shutdown():
+            """Cerrar servicio"""
+            self.shutdown_event.set()
+            return jsonify({'message': 'Servicio cerrándose...'})
+        
+        # Agregar ruta de prueba para debug
+        @self.flask_app.route('/test', methods=['GET', 'POST'])
+        def test():
+            """Ruta de prueba para verificar conectividad"""
+            if request.method == 'GET':
+                return jsonify({'message': 'Servidor funcionando correctamente', 'method': 'GET'})
+            else:
+                data = request.get_json() if request.is_json else request.form.to_dict()
+                return jsonify({'message': 'POST recibido correctamente', 'data': data, 'method': 'POST'})
+    
+    def start_service(self):
+        """Iniciar el servicio"""
         try:
-            self.flask_app = Flask(__name__)
-            CORS(self.flask_app)
+            # Verificar si el puerto está disponible
+            if not self.check_port_available(self.port):
+                if not self.is_installer_mode:
+                    print(f"✗ Puerto {self.port} ya está en uso")
+                return False
             
-            # Ruta para verificar estado de la aplicación
-            @self.flask_app.route('/estado', methods=['GET'])
-            def estado():
-                return jsonify({
-                    'status': 'zkteco activo',
-                    'instalado': True,
-                    'version': '1.1',
-                    'tipo': 'servidor_standalone',
-                    'timestamp': datetime.now().isoformat()
-                })
+            self.start_time = time.time()
             
-            @self.flask_app.route('/info', methods=['GET'])
-            def info():
-                return jsonify({
-                    'aplicacion': 'ZKTeco Server',
-                    'version': '1.1',
-                    'estado': 'activo',
-                    'tipo': 'servidor_standalone',
-                    'puerto': 3322
-                })
+            # Solo mostrar mensajes si no estamos en modo instalador
+            if not self.is_installer_mode:
+                print("ZKTeco Service v1.0 - Iniciando...")
             
-            # Ruta para cerrar servidor
-            @self.flask_app.route('/shutdown', methods=['POST'])
-            def shutdown():
-                func = request.environ.get('werkzeug.server.shutdown')
-                if func is None:
-                    raise RuntimeError('Not running with the Werkzeug Server')
-                func()
-                return jsonify({'message': 'Server shutting down...'})
+            # Inicializar Flask
+            self.init_flask_server()
             
-            def iniciar_servidor():
+            # Iniciar servidor Flask en thread separado
+            def run_flask():
+                # Suprimir salida de Flask completamente en modo instalador
+                if self.is_installer_mode:
+                    import sys
+                    from io import StringIO
+                    old_stdout = sys.stdout
+                    old_stderr = sys.stderr
+                    sys.stdout = StringIO()
+                    sys.stderr = StringIO()
+                
                 try:
                     self.flask_app.run(
-                        port=3322, 
-                        host='127.0.0.1', 
-                        debug=False, 
+                        host=self.host,
+                        port=self.port,
+                        debug=False,
                         use_reloader=False,
                         threaded=True
                     )
                 except Exception as e:
-                    print(f"Error iniciando servidor Flask: {e}")
+                    if not self.is_installer_mode:
+                        print(f"Error en Flask: {e}")
+                finally:
+                    if self.is_installer_mode:
+                        sys.stdout = old_stdout
+                        sys.stderr = old_stderr
             
-            # Iniciar servidor en hilo separado
-            self.flask_thread = threading.Thread(target=iniciar_servidor, daemon=False)
+            self.flask_thread = threading.Thread(target=run_flask, daemon=True)
             self.flask_thread.start()
             
-            print("Iniciando servidor ZKTeco en puerto 3322...")
-            print("✓ Servidor ZKTeco iniciado exitosamente en http://127.0.0.1:3322")
+            # Esperar un momento para que Flask se inicie
+            time.sleep(1 if not self.is_installer_mode else 2)
+            
+            self.running = True
+            
+            if not self.is_installer_mode:
+                print(f"✓ Servidor iniciado en http://{self.host}:{self.port}")
+                print("Rutas disponibles:")
+                print("  GET  /estado - Estado del servicio")
+                print("  POST /execute-sync - Ejecutar sincronización")
+                print("  GET/POST /test - Ruta de prueba")
+                print("  POST /shutdown - Cerrar servicio")
+            
+            # Comportamiento diferente según el modo
+            if self.is_installer_mode:
+                # En modo instalador, ejecutar en segundo plano
+                self.run_background_service()
+            else:
+                # En modo normal, esperar comandos del usuario
+                self.run_interactive_service()
+            
+            return True
             
         except Exception as e:
-            print(f"Error configurando servidor Flask: {e}")
-
-    def mantener_activo(self):
-        """Mantener el servidor activo hasta que se ejecute el comando stop"""
+            if not self.is_installer_mode:
+                print(f"✗ Error iniciando servicio: {e}")
+            return False
+    
+    def run_interactive_service(self):
+        """Ejecutar servicio en modo interactivo"""
         try:
-            if self.flask_thread and self.flask_thread.is_alive():
-                # Mantener el hilo principal activo sin mostrar mensaje
-                self.flask_thread.join()
-        except Exception:
+            print("Servicio ejecutándose. Escribe 'stop' para detener:")
+            while not self.shutdown_event.is_set():
+                try:
+                    user_input = input().strip()
+                    if user_input == 'stop':
+                        print("✓ Deteniendo servicio...")
+                        self.shutdown_event.set()
+                        break
+                except (EOFError, KeyboardInterrupt):
+                    self.shutdown_event.set()
+                    break
+                time.sleep(0.1)
+        except:
             pass
+    
+    def run_background_service(self):
+        """Ejecutar servicio en segundo plano (modo instalador)"""
+        try:
+            # En modo instalador, solo escuchar señales de cierre
+            while not self.shutdown_event.is_set():
+                time.sleep(1)
+        except:
+            pass
+    
+    def stop_service(self):
+        """Detener el servicio"""
+        try:
+            self.shutdown_event.set()
+            self.running = False
+            return True
+        except Exception as e:
+            if not self.is_installer_mode:
+                print(f"✗ Error deteniendo servicio: {e}")
+            return False
+    
+    def is_running(self):
+        """Verificar si el servicio está ejecutándose"""
+        try:
+            response = requests.get(f'http://{self.host}:{self.port}/estado', timeout=2)
+            return response.status_code == 200
+        except:
+            return False
 
-def stop_server():
-    """Detener el servidor remotamente"""
-    try:
-        response = requests.post('http://127.0.0.1:3322/shutdown', timeout=2)
-        if response.status_code == 200:
-            print("Servidor detenido exitosamente.")
-        else:
-            print("Error al detener el servidor.")
-    except requests.exceptions.ConnectionError:
-        print("El servidor no está ejecutándose o ya fue detenido.")
-    except Exception as e:
-        print(f"Error al intentar detener el servidor: {e}")
+
+def signal_handler(signum, frame):
+    """Manejar señales del sistema"""
+    sys.exit(0)
+
 
 def main():
-    # Verificar argumentos de línea de comandos
-    if len(sys.argv) > 1 and sys.argv[1] == 'stop':
-        stop_server()
-        return
+    # Configurar manejo de señales
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
-    print("=== Servidor ZKTeco Standalone ===")
-    server = ZKTecoServer()
+    if len(sys.argv) != 2 or sys.argv[1] not in ['start', 'stop']:
+        print("Uso:")
+        print("  python zkteco_service.py start    - Iniciar servicio")
+        print("  python zkteco_service.py stop     - Detener servicio")
+        sys.exit(1)
     
-    if not server.service_running:
-        server.mantener_activo()
-    else:
-        print("No se puede iniciar: el servicio ya está ejecutándose")
+    action = sys.argv[1]
+    service = ZKTecoService()
+    
+    if action == 'start':
+        # Verificar si ya está ejecutándose
+        if service.is_running():
+            if not service.is_installer_mode:
+                print("✗ El servicio ya está ejecutándose")
+            sys.exit(1)
+        
+        # Iniciar servicio
+        try:
+            if service.start_service():
+                if not service.is_installer_mode:
+                    print("✓ Servicio detenido")
+                sys.exit(0)
+            else:
+                if not service.is_installer_mode:
+                    print("✗ Error iniciando servicio")
+                sys.exit(1)
+        except KeyboardInterrupt:
+            if not service.is_installer_mode:
+                print("✓ Servicio interrumpido por usuario")
+            sys.exit(0)
+        except Exception as e:
+            if not service.is_installer_mode:
+                print(f"✗ Error: {e}")
+            sys.exit(1)
+    
+    elif action == 'stop':
+        # Verificar si está ejecutándose
+        if not service.is_running():
+            if not service.is_installer_mode:
+                print("✗ El servicio no está ejecutándose")
+            sys.exit(1)
+        
+        # Detener servicio
+        try:
+            response = requests.post(f'http://{service.host}:{service.port}/shutdown', timeout=5)
+            if response.status_code == 200:
+                if not service.is_installer_mode:
+                    print("✓ Servicio detenido correctamente")
+                sys.exit(0)
+            else:
+                if not service.is_installer_mode:
+                    print("✗ Error deteniendo servicio")
+                sys.exit(1)
+        except Exception as e:
+            if not service.is_installer_mode:
+                print(f"✗ Error deteniendo servicio: {e}")
+            sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
