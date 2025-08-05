@@ -15,7 +15,7 @@ import socket
 import os
 import subprocess
 import json
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import argparse
@@ -38,6 +38,11 @@ class ZKTecoService:
         
         # Detectar si estamos en un instalador
         self.is_installer_mode = self.detect_installer_mode()
+        
+        # --- PARTE AGREGADA: Configuración de la sincronización automática ---
+        self.auto_sync_thread = None
+        self.api_url_base = "http://localhost:8000/api/zkteco"
+        # --- FIN DE LA PARTE AGREGADA ---
         
     def detect_installer_mode(self):
         """Detectar si estamos siendo ejecutados desde un instalador"""
@@ -84,7 +89,108 @@ class ZKTecoService:
                 return True
         except:
             return False
+            
+    # --- PARTE AGREGADA: Lógica para la sincronización automática ---
+    def _run_auto_sync_loop(self):
+        """Bucle principal de la sincronización automática."""
+        if not self.is_installer_mode:
+            print("✓ Sincronización automática activada. Esperando a la medianoche...")
+            
+        while not self.shutdown_event.is_set():
+            # --- TEMPORAL: Para propósitos de prueba, ejecutar cada 60 segundos ---
+            #time_to_wait = 60 # Esperar 60 segundos
+            # ----------------------------------------------------------------------
+                
+            # Calcular tiempo hasta la próxima medianoche (00:00:00)
+            now = datetime.now()
+            next_midnight = datetime.combine(now.date(), datetime_time(0, 0))
+            if now > next_midnight:
+                next_midnight = next_midnight.replace(day=now.day + 1)
+
+            # Si el servicio se inicia a las 00:00:01, forzar la sincronización en ~5 segundos.
+            time_to_wait = (next_midnight - now).total_seconds()
+            if time_to_wait < 60: # Si estamos cerca de medianoche
+                time_to_wait = 5
+
+            if not self.is_installer_mode:
+                print(f"La próxima sincronización será en {int(time_to_wait)} segundos (a la medianoche).")
+            
+            # Esperar, o salir si el evento de cierre se activa
+            self.shutdown_event.wait(timeout=time_to_wait)
+            
+            if self.shutdown_event.is_set():
+                break
+                
+            self._perform_auto_sync()
+            
+    def _perform_auto_sync(self):
+        """Realiza la sincronización de todos los dispositivos de la red local."""
+        if not self.is_installer_mode:
+            print(f"\n--- Iniciando sincronización automática a las {datetime.now().strftime('%H:%M:%S')} ---")
+        
+        try:
+            # 1. Obtener la lista de dispositivos de la API
+            devices_url = f"{self.api_url_base}/biometricdevices"
+            response = requests.get(devices_url, timeout=10)
+            devices = response.json()
+            
+            if not isinstance(devices, list) or not devices:
+                if not self.is_installer_mode:
+                    print("✗ No se encontraron dispositivos para sincronizar.")
+                return
+            
+            if not self.is_installer_mode:
+                print(f"✓ {len(devices)} dispositivos encontrados en el sistema.")
+                
+            # 2. Iterar sobre cada dispositivo
+            app_path = self.get_sync_app_path()
+            if not app_path:
+                if not self.is_installer_mode:
+                    print("✗ Ejecutable ZKTeco-Sync.exe no encontrado. Abortando.")
+                return
+                
+            for device_data in devices:
+                ip = device_data.get('ip_address')
+                port = device_data.get('port')
+                if not ip or not port:
+                    continue
+                
+                # Opcional: Verificación simple de conectividad (ping)
+                if not self.is_installer_mode:
+                    print(f"  > Intentando conectar con {ip} ({device_data.get('name')})...")
+                    
+                # Ejecutar la sincronización en modo silencioso. La app ZKTeco-Sync.exe se encargará de la conexión.
+                params = json.dumps(device_data, ensure_ascii=False)
+                
+                # Ejecutar la aplicación en modo silencioso (con el nuevo argumento --silent)
+                subprocess.Popen(
+                    [app_path, '--params-system', params, '--silent'],
+                    shell=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                )
+                if not self.is_installer_mode:
+                    print(f"    ✓ Sincronización silenciosa iniciada para {ip}.")
+
+        except requests.exceptions.RequestException as e:
+            if not self.is_installer_mode:
+                print(f"✗ Error al conectar con la API de dispositivos: {e}")
+        except Exception as e:
+            if not self.is_installer_mode:
+                print(f"✗ Error durante la sincronización automática: {e}")
+                
+        if not self.is_installer_mode:
+            print("--- Sincronización automática finalizada ---")
+    # --- FIN DE LA PARTE AGREGADA ---
     
+    def get_sync_app_path(self):
+        """Busca y retorna la ruta del ejecutable ZKTeco-Sync.exe"""
+        app_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ZKTeco-Sync.exe')
+        if not os.path.exists(app_path):
+            app_path = 'C:\\Program Files\\ZKTeco Sync\\ZKTeco-Sync.exe'
+        if not os.path.exists(app_path):
+            return None
+        return app_path
+
     def init_flask_server(self):
         """Inicializar servidor Flask básico"""
         self.flask_app = Flask(__name__)
@@ -111,32 +217,27 @@ class ZKTecoService:
         def execute_sync():
             """Ejecuta la sincronización con parámetros del dispositivo"""
             try:
-                # Obtener datos del dispositivo
                 device_data = request.get_json()
                 if not device_data:
                     return jsonify({'success': False, 'message': 'No se recibieron datos'}), 400
 
-                # Validar campos requeridos
                 required_fields = ['id', 'name', 'ip_address', 'port']
                 for field in required_fields:
                     if field not in device_data:
                         return jsonify({'success': False, 'message': f'Campo requerido faltante: {field}'}), 400
 
-                # Buscar ejecutable
-                app_path = os.path.join(os.path.dirname(__file__), 'ZKTeco-Sync.exe')
-                if not os.path.exists(app_path):
-                    app_path = 'C:\\Program Files\\ZKTeco Sync\\ZKTeco-Sync.exe'
-                if not os.path.exists(app_path):
+                app_path = self.get_sync_app_path()
+                if not app_path:
                     return jsonify({'success': False, 'message': 'ZKTeco-Sync no encontrada'}), 404
 
-                # Ejecutar aplicación con parámetros
                 params = json.dumps(device_data, ensure_ascii=False)
                 
                 # Debug - log de los parámetros enviados (solo si no está en modo instalador)
                 if not self.is_installer_mode:
-                    print(f"Ejecutando: {app_path}")
-                    print(f"Parámetros: {params}")
+                    print(f"\n[MANUAL] Ejecutando: {app_path}")
+                    print(f"[MANUAL] Parámetros: {params}")
                 
+                # Ejecutar en modo interactivo (con GUI)
                 subprocess.Popen(
                     [app_path, '--params-system', params],
                     shell=False,
@@ -223,6 +324,11 @@ class ZKTecoService:
             
             self.flask_thread = threading.Thread(target=run_flask, daemon=True)
             self.flask_thread.start()
+
+            # --- PARTE AGREGADA: Iniciar el hilo de sincronización automática ---
+            self.auto_sync_thread = threading.Thread(target=self._run_auto_sync_loop, daemon=True)
+            self.auto_sync_thread.start()
+            # --- FIN DE LA PARTE AGREGADA ---
             
             # Esperar un momento para que Flask se inicie
             time.sleep(1 if not self.is_installer_mode else 2)
@@ -232,10 +338,10 @@ class ZKTecoService:
             if not self.is_installer_mode:
                 print(f"✓ Servidor iniciado en http://{self.host}:{self.port}")
                 print("Rutas disponibles:")
-                print("  GET  /estado - Estado del servicio")
-                print("  POST /execute-sync - Ejecutar sincronización")
-                print("  GET/POST /test - Ruta de prueba")
-                print("  POST /shutdown - Cerrar servicio")
+                print("   GET  /estado - Estado del servicio")
+                print("   POST /execute-sync - Ejecutar sincronización (manual)")
+                print("   GET/POST /test - Ruta de prueba")
+                print("   POST /shutdown - Cerrar servicio")
             
             # Comportamiento diferente según el modo
             if self.is_installer_mode:
@@ -311,8 +417,8 @@ def main():
     
     if len(sys.argv) != 2 or sys.argv[1] not in ['start', 'stop']:
         print("Uso:")
-        print("  python zkteco_service.py start    - Iniciar servicio")
-        print("  python zkteco_service.py stop     - Detener servicio")
+        print("   python zkteco_service.py start    - Iniciar servicio")
+        print("   python zkteco_service.py stop    - Detener servicio")
         sys.exit(1)
     
     action = sys.argv[1]
@@ -328,9 +434,8 @@ def main():
         # Iniciar servicio
         try:
             if service.start_service():
-                if not service.is_installer_mode:
-                    print("✓ Servicio detenido")
-                sys.exit(0)
+                # El servicio se ejecutará hasta que se detenga
+                pass
             else:
                 if not service.is_installer_mode:
                     print("✗ Error iniciando servicio")

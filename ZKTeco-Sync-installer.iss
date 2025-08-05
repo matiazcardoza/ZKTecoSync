@@ -1,6 +1,6 @@
 [Setup]
 AppName=ZKTeco Sync
-AppVersion=1.1
+AppVersion=1.2
 AppPublisher=Tu Empresa
 AppPublisherURL=https://www.tuempresa.com
 AppSupportURL=https://www.tuempresa.com/soporte
@@ -18,13 +18,13 @@ WizardImageFile=
 WizardSmallImageFile=
 ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\ZKTeco-Sync.exe
-UninstallDisplayName=ZKTeco Sync v1.1
-VersionInfoVersion=1.1.0.0
+UninstallDisplayName=ZKTeco Sync v1.2
+VersionInfoVersion=1.2.0.0
 VersionInfoCompany=Tu Empresa
 VersionInfoDescription=Sistema de sincronización ZKTeco
 VersionInfoCopyright=Copyright (C) 2025
 VersionInfoProductName=ZKTeco Sync
-VersionInfoProductVersion=1.1.0.0
+VersionInfoProductVersion=1.2.0.0
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
@@ -96,12 +96,12 @@ begin
   Result := False;
   ScriptPath := ExpandConstant('{app}\scripts\start_service.bat');
   
-  if Exec(ScriptPath, '', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  // Modificación aquí: pasar el parámetro "SILENT"
+  if Exec(ScriptPath, 'SILENT', ExpandConstant('{app}\scripts'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     Result := (ResultCode = 0);
   end;
 end;
-
 // Función para detener servicio silenciosamente
 function StopService(): Boolean;
 var

@@ -16,6 +16,146 @@ try:
 except ImportError:
     ZK_AVAILABLE = False
 
+# --- PARTE AGREGADA: Clase para la ejecución silenciosa ---
+class ZKTecoSilentSync:
+    def __init__(self, device_info):
+        self.device_info = device_info
+        self.api_url_base = "http://localhost:8000/api/zkteco"
+        # self.api_url_base = "https://sistemas.regionpuno.gob.pe/asiss-api/api/zkteco"
+        self.log_messages = []
+        
+        # Iniciar la sincronización automáticamente
+        self.log("Modo silencioso iniciado.")
+        self.log(f"Dispositivo: {self.device_info['name']} ({self.device_info['ip_address']}:{self.device_info['port']})")
+        
+        # Primero, limpia el caché en la nube antes de extraer y enviar los datos
+        self.clear_cloud_cache()
+
+        # Luego, extrae y envía los registros
+        self.extract_and_send_attendance()
+
+    def log(self, message):
+        """Método de log simple para el modo silencioso"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {message}"
+        print(log_entry)
+        self.log_messages.append(log_entry)
+
+    def extract_and_send_attendance(self):
+        """Conecta, extrae y envía los datos en modo silencioso"""
+        if not ZK_AVAILABLE:
+            self.log("ERROR: Librería 'pyzk' no encontrada. Abortando.")
+            return
+
+        try:
+            ip = self.device_info['ip_address']
+            port = int(self.device_info['port'])
+            
+            self.log("Conectando al dispositivo...")
+            zk = ZK(ip, port=port, timeout=5)
+            conn = zk.connect()
+            
+            if not conn:
+                self.log("ERROR: No se pudo conectar al dispositivo.")
+                return
+
+            self.log("✓ Conexión exitosa.")
+            self.log("Extrayendo registros de asistencia...")
+            
+            attendance = conn.get_attendance()
+            
+            if attendance:
+                attendance_data = []
+                device_id = self.device_info.get('id')
+                for record in attendance:
+                    attendance_data.append({
+                        'uid': record.uid,
+                        'id': record.user_id,
+                        'timestamp': record.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                        'state': record.status,
+                        'type': record.punch,
+                        'device_id': device_id
+                    })
+                
+                self.log(f"✓ {len(attendance)} registros extraídos.")
+                
+                cloud_success = self.send_data_to_cloud('attendance', attendance_data, f"{self.api_url_base}/attendance")
+                
+                if cloud_success:
+                    self.log("✓ Sincronización completada exitosamente.")
+                else:
+                    self.log("✗ Fallo en la sincronización.")
+                    
+            else:
+                self.log("No se encontraron registros de asistencia en el dispositivo.")
+                
+            conn.disconnect()
+            self.log("Desconexión exitosa.")
+
+        except Exception as e:
+            self.log(f"ERROR: Fallo crítico durante la sincronización: {e}")
+
+    def send_data_to_cloud(self, data_type, data, endpoint):
+        """Enviar solo los datos a la API de Laravel"""
+        try:
+            self.log(f"Enviando {len(data)} registros a la nube...")
+            url = endpoint
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            }
+            
+            response = requests.post(
+                url, 
+                json=data,
+                headers=headers,
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                self.log(f"✓ {data_type.title()} enviados exitosamente. Respuesta HTTP: {response.status_code}")
+                return True
+            else:
+                self.log(f"✗ Error HTTP {response.status_code}. Respuesta: {response.text[:100]}")
+                return False
+            
+        except requests.exceptions.Timeout:
+            self.log("✗ Error de Timeout (60s) al enviar a la nube.")
+            return False
+        except requests.exceptions.ConnectionError:
+            self.log("✗ Error de conexión con el servidor.")
+            return False
+        except Exception as e:
+            self.log(f"✗ Error inesperado al enviar a la nube: {e}")
+            return False
+
+    def clear_cloud_cache(self):
+        """Limpia el caché de asistencia de la API de Laravel."""
+        try:
+            self.log("Limpiando el caché de la nube...")
+            url = f"{self.api_url_base}/clear-attendance"
+            headers = {'Accept': 'application/json'}
+            
+            # Asumiendo que el endpoint de Laravel usa un método GET o DELETE.
+            # Aquí se usa GET por simplicidad, pero DELETE sería más apropiado.
+            response = requests.delete(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                self.log(f"✓ Caché de asistencia limpiado. Respuesta: {response.json()['message']}")
+                return True
+            else:
+                self.log(f"✗ Fallo al limpiar el caché. Código de estado: {response.status_code}")
+                return False
+
+        except requests.exceptions.ConnectionError:
+            self.log("✗ Error de conexión con la API al intentar limpiar la caché.")
+            return False
+        except Exception as e:
+            self.log(f"✗ Error inesperado al limpiar la caché: {e}")
+            return False
+# --- FIN DE LA PARTE AGREGADA ---
+
+
 class ZKTecoApp:
     def __init__(self, root):
         self.root = root
@@ -23,15 +163,12 @@ class ZKTecoApp:
         self.root.resizable(True, True)
         self.root.resizable(False, False)
         
-        # Variables
         self.connection = None
         self.device = None
         self.is_connected = False
         
-        # OPTIMIZADO: Parsing rápido de parámetros
         self.system_params = self.parse_system_params_fast()
         
-        # Variables para dispositivo (ahora desde parámetros)
         self.device_info = None
         self.current_device_id = None
         
@@ -44,21 +181,18 @@ class ZKTecoApp:
     def parse_system_params_fast(self):
         """Parsing optimizado de parámetros del sistema"""
         try:
-            # Método más rápido: buscar directamente en sys.argv
             for i, arg in enumerate(sys.argv):
                 if arg == '--params-system' and i + 1 < len(sys.argv):
                     param_value = sys.argv[i + 1]
                     try:
                         return json.loads(param_value)
                     except json.JSONDecodeError:
-                        # Intentar limpiar el JSON una sola vez
                         cleaned = param_value.strip().replace(' :', ':').replace(': ', ':')
                         try:
                             return json.loads(cleaned)
                         except:
                             return None
             
-            # Fallback: variable de entorno
             env_params = os.environ.get('ZKTECO_PARAMS')
             if env_params:
                 return json.loads(env_params)
@@ -66,15 +200,13 @@ class ZKTecoApp:
             return None
             
         except Exception:
-            # Sin prints de debug para mayor velocidad
             return None
     
     def setup_ui(self):
-        # Marco principal
+        # ... [El resto del código de `setup_ui` se mantiene sin cambios] ...
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-        # Configurar device_info una sola vez
         if self.system_params:
             self.device_info = {
                 'id': self.system_params.get('id'),
@@ -84,12 +216,10 @@ class ZKTecoApp:
             }
             self.current_device_id = self.device_info['id']
 
-        # Configuración de conexión (simplificada)
         config_frame = ttk.LabelFrame(main_frame, text="Configuración de Conexión", padding="10")
         config_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         if self.system_params:
-            # Layout más eficiente
             labels_data = [
                 ("Dispositivo:", self.device_info['name']),
                 ("IP:", self.device_info['ip_address']),
@@ -104,17 +234,14 @@ class ZKTecoApp:
             error_label = ttk.Label(config_frame, text="No se puede continuar sin parámetros del dispositivo", foreground='red')
             error_label.grid(row=0, column=0, columnspan=2)
 
-        # Timeout
         ttk.Label(config_frame, text="Timeout (s):").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
         self.timeout_var = tk.StringVar(value="5")
         timeout_entry = ttk.Entry(config_frame, textvariable=self.timeout_var, width=10)
         timeout_entry.grid(row=3, column=1, sticky=tk.W, pady=(10, 0))
 
-        # Botones de conexión
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=1, column=0, columnspan=2, pady=(0, 10))
         
-        # Solo habilitar botones si tenemos parámetros
         button_state = "normal" if self.system_params else "disabled"
         
         self.test_btn = ttk.Button(button_frame, text="Probar Conexión", command=self.test_connection, state=button_state)
@@ -126,7 +253,6 @@ class ZKTecoApp:
         self.disconnect_btn = ttk.Button(button_frame, text="Desconectar", command=self.disconnect_device, state="disabled")
         self.disconnect_btn.grid(row=0, column=2)
         
-        # Indicador de estado
         status_frame = ttk.Frame(main_frame)
         status_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
         
@@ -135,18 +261,15 @@ class ZKTecoApp:
         self.status_label = ttk.Label(status_frame, textvariable=self.status_var, foreground="red")
         self.status_label.grid(row=0, column=1)
         
-        # Botón de extracción de asistencias únicamente
         data_frame = ttk.LabelFrame(main_frame, text="Extracción y Sincronización", padding="10")
         data_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         self.extract_attendance_btn = ttk.Button(data_frame, text="Extraer y Enviar Asistencias", command=self.extract_attendance, state="disabled")
         self.extract_attendance_btn.grid(row=0, column=0)
         
-        # Log de eventos
         log_frame = ttk.LabelFrame(main_frame, text="Log de Eventos", padding="10")
         log_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
-        # Texto con scrollbar
         log_scroll_frame = ttk.Frame(log_frame)
         log_scroll_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
@@ -157,10 +280,8 @@ class ZKTecoApp:
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         
-        # Botón para limpiar log
         ttk.Button(log_frame, text="Limpiar Log", command=self.clear_log).grid(row=1, column=0, pady=(10, 0))
         
-        # Configurar weights para redimensionamiento
         main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(4, weight=1)
         log_frame.columnconfigure(0, weight=1)
@@ -171,7 +292,6 @@ class ZKTecoApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         
-        # Log inicial - OPTIMIZADO
         self.log("Aplicación iniciada - Solo sincronización de asistencias")
         
         if ZK_AVAILABLE:
@@ -179,7 +299,6 @@ class ZKTecoApp:
         else:
             self.log("ADVERTENCIA: Instalar con 'pip install pyzk requests'")
         
-        # Log de parámetros - SIMPLIFICADO
         if self.system_params:
             self.log(f"✓ Dispositivo configurado: {self.device_info['name']} ({self.device_info['ip_address']}:{self.device_info['port']})")
         else:
@@ -210,7 +329,7 @@ class ZKTecoApp:
         self.log_text.delete(1.0, tk.END)
     
     def test_connection(self):
-        """Probar conexión con el dispositivo - OPTIMIZADO"""
+        """Probar conexión con el dispositivo"""
         if not ZK_AVAILABLE:
             messagebox.showerror("Error", "Librería pyzk no está instalada")
             return
@@ -228,21 +347,19 @@ class ZKTecoApp:
                 port = int(self.device_info['port'])
                 timeout = int(self.timeout_var.get())
                 
-                # Log reducido para mayor velocidad
                 self.log(f"Conectando a {ip}:{port}")
                 
                 zk = ZK(ip, port=port, timeout=timeout)
                 conn = zk.connect()
                 
                 if conn:
-                    # Obtener solo información de asistencias
                     try:
                         attendance_count = len(conn.get_attendance())
                         
                         conn.disconnect()
                         
                         self.log("✓ Conexión exitosa!")
-                        self.log(f"  - Registros de asistencia: {attendance_count}")
+                        self.log(f"  - Registros de asistencia: {attendance_count}")
                         
                         messagebox.showinfo("Éxito", "Conexión establecida correctamente")
                     except Exception as e:
@@ -259,7 +376,6 @@ class ZKTecoApp:
             finally:
                 self.test_btn.config(state="normal")
         
-        # Ejecutar en hilo separado
         threading.Thread(target=test_conn, daemon=True).start()
     
     def connect_device(self):
@@ -289,7 +405,6 @@ class ZKTecoApp:
                     self.status_var.set("Conectado")
                     self.status_label.config(foreground="green")
                     
-                    # Habilitar solo botón de extracción de asistencias
                     self.extract_attendance_btn.config(state="normal")
                     self.disconnect_btn.config(state="normal")
                     
@@ -320,7 +435,6 @@ class ZKTecoApp:
             self.status_var.set("Desconectado")
             self.status_label.config(foreground="red")
             
-            # Deshabilitar botón de asistencias
             self.extract_attendance_btn.config(state="disabled")
             self.disconnect_btn.config(state="disabled")
             self.connect_btn.config(state="normal")
@@ -344,21 +458,26 @@ class ZKTecoApp:
                 
                 if attendance:
                     attendance_data = []
+                    device_id = self.device_info.get('id')
                     for record in attendance:
                         attendance_data.append({
                             'uid': record.uid,
                             'id': record.user_id,
                             'timestamp': record.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                             'state': record.status,
-                            'type': record.punch
+                            'type': record.punch,
+                            'device_id': device_id
                         })
                     
                     self.log(f"✓ {len(attendance)} registros extraídos del dispositivo")
+
+                    #url de local
+                    cloud_success = self.send_data_to_cloud('attendance', attendance_data, 'http://localhost:8000/api/zkteco/attendance')
+
+
+                    # URL de producción
+                    #cloud_success = self.send_data_to_cloud('attendance', attendance_data, 'https://sistemas.regionpuno.gob.pe/asiss-api/api/zkteco/attendance')
                     
-                    # Enviar a la nube
-                    cloud_success = self.send_data_to_cloud('attendance', attendance_data, '/api/zkteco/attendance')
-                    
-                    # Mensaje de resultado
                     if cloud_success:
                         messagebox.showinfo("Éxito", "Asistencias sincronizadas correctamente")
                         self.log("✓ Sincronización completada exitosamente")
@@ -382,47 +501,34 @@ class ZKTecoApp:
         try:
             self.log(f"Enviando {data_type} a la nube...")
             
-            # URL base de api Local
-            #base_url = "http://localhost:8000/api/zkteco/attendance"
-            # URL bade de api producción
-            base_url = "https://sistemas.regionpuno.gob.pe/asiss-api/api/zkteco/attendance"
-
-            url = urljoin(base_url, endpoint)
+            url = endpoint
+            payload = data
             
-            # Payload simplificado - solo los datos
-            payload = data  # Directamente el array de datos
-            
-            # Headers para Laravel
             headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
             }
             
-            # Log para debugging
             self.log(f"Enviando a: {url}")
             self.log(f"Cantidad de registros: {len(data)}")
             
-            # Hacer la petición POST
             response = requests.post(
                 url, 
-                json=payload,  # Enviar directamente el array
+                json=payload,
                 headers=headers,
                 timeout=60
             )
             
-            # Log de respuesta
             self.log(f"Código de respuesta: {response.status_code}")
             
             if response.status_code == 200:
                 try:
                     response_data = response.json()
                     self.log(f"✓ {data_type.title()} enviados exitosamente")
-                    # Si Laravel devuelve información adicional
                     if isinstance(response_data, dict) and 'message' in response_data:
-                        self.log(f"  - Respuesta: {response_data['message']}")
+                        self.log(f"   - Respuesta: {response_data['message']}")
                     return True
                 except:
-                    # Si Laravel no devuelve JSON, pero el status es 200
                     self.log(f"✓ {data_type.title()} enviados exitosamente")
                     return True
             else:
@@ -432,7 +538,7 @@ class ZKTecoApp:
                 except:
                     self.log(f"✗ Error HTTP {response.status_code}: {response.text[:200]}")
                 return False
-                
+            
         except requests.exceptions.Timeout:
             self.log(f"✗ Timeout enviando a la nube (60s)")
             return False
@@ -445,10 +551,35 @@ class ZKTecoApp:
 
 
 def main():
+    # --- PARTE MODIFICADA: Detectar el modo silencioso ---
+    parser = argparse.ArgumentParser(description="ZKTeco Sync Application")
+    parser.add_argument('--silent', action='store_true', help="Ejecuta la aplicación en modo silencioso sin GUI.")
+    parser.add_argument('--params-system', help="Parámetros del dispositivo en formato JSON.")
+    args, unknown = parser.parse_known_args()
+
+    # Si se detecta el modo silencioso, ejecutar la lógica silenciosa
+    if args.silent:
+        # Obtener los parámetros del dispositivo
+        device_data = None
+        for i, arg in enumerate(sys.argv):
+            if arg == '--params-system' and i + 1 < len(sys.argv):
+                try:
+                    device_data = json.loads(sys.argv[i + 1])
+                    break
+                except json.JSONDecodeError:
+                    pass
+        
+        if device_data:
+            ZKTecoSilentSync(device_data)
+        else:
+            print("ERROR: Parámetros del dispositivo no encontrados para el modo silencioso.")
+        return # Terminar la ejecución sin iniciar la GUI
+    # --- FIN DE LA PARTE MODIFICADA ---
+
+    # Lógica de la GUI (original)
     root = tk.Tk()
     app = ZKTecoApp(root)
     
-    # Manejo del cierre de ventana
     def on_closing():
         if app.is_connected:
             app.disconnect_device()

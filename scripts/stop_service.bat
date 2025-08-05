@@ -1,28 +1,37 @@
 @echo off
-REM Script silencioso para detener servicio ZKTeco durante la desinstalación
+setlocal
 
-REM Verificar si está ejecutándose
-tasklist /FI "IMAGENAME eq zkteco_service.exe" 2>NUL | find /I /N "zkteco_service.exe">NUL
-if not "%ERRORLEVEL%"=="0" (
-    REM No está ejecutándose, salir silenciosamente
+REM =========================================================
+REM Script para detener el servicio ZKTeco de forma amigable.
+REM =========================================================
+
+echo Intentando detener el servicio ZKTeco de forma amigable...
+
+REM Comprobar si el servicio ya no está en ejecución
+tasklist /FI "IMAGENAME eq zkteco_service.exe" | find "zkteco_service.exe" >nul
+if not %ERRORLEVEL%==0 (
+    echo [INFO] El servicio ya esta detenido.
     exit /b 0
 )
 
-REM Intentar detener amigablemente usando la API
-curl -X POST http://127.0.0.1:3322/shutdown -m 5 >nul 2>&1
+REM Intentar detener amigablemente usando la API de shutdown
+powershell -command "try { Invoke-WebRequest -Uri http://127.0.0.1:3322/shutdown -Method POST -TimeoutSec 5 -ErrorAction Stop } catch { exit 1 }"
 if %ERRORLEVEL%==0 (
-    REM Esperar a que se detenga
-    timeout /t 3 /nobreak >nul 2>&1
+    echo [EXITO] Peticion de apagado enviada. Esperando a que el servicio se detenga...
+    timeout /t 5 /nobreak >nul
+) else (
+    echo [ALERTA] No se pudo conectar con el servicio.
 )
 
-REM Verificar si se detuvo
-tasklist /FI "IMAGENAME eq zkteco_service.exe" 2>NUL | find /I /N "zkteco_service.exe">NUL
-if not "%ERRORLEVEL%"=="0" (
-    REM Ya se detuvo
+REM Comprobar si se detuvo
+tasklist /FI "IMAGENAME eq zkteco_service.exe" | find "zkteco_service.exe" >nul
+if %ERRORLEVEL%==0 (
+    echo [ALERTA] El servicio no se detuvo despues de la peticion. Forzando el cierre...
+    taskkill /F /IM "zkteco_service.exe" >nul
+    timeout /t 2 /nobreak >nul
+    echo [EXITO] Servicio detenido.
     exit /b 0
 ) else (
-    REM Forzar cierre si es necesario
-    taskkill /F /IM "zkteco_service.exe" >nul 2>&1
-    timeout /t 1 /nobreak >nul 2>&1
+    echo [EXITO] Servicio detenido correctamente.
     exit /b 0
 )
