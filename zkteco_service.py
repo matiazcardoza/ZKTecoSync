@@ -94,28 +94,38 @@ class ZKTecoService:
     def _run_auto_sync_loop(self):
         """Bucle principal de la sincronización automática."""
         if not self.is_installer_mode:
-            print("✓ Sincronización automática activada. Esperando a la medianoche...")
+            print("✓ Sincronización automática activada. Programada para 12:00:00 y 00:00:00.")
             
         while not self.shutdown_event.is_set():
-            # --- TEMPORAL: Para propósitos de prueba, ejecutar cada 60 segundos ---
-            #time_to_wait = 60 # Esperar 60 segundos
-            # ----------------------------------------------------------------------
-                
-            # Calcular tiempo hasta la próxima medianoche (00:00:00)
             now = datetime.now()
-            next_midnight = datetime.combine(now.date(), datetime_time(0, 0))
-            if now > next_midnight:
-                next_midnight = next_midnight.replace(day=now.day + 1)
+            
+            # Sincronización a las 12:00:00 (mediodía)
+            next_noon_sync = datetime.combine(now.date(), datetime_time(12, 0))
+            # Sincronización a las 00:00:00 (medianoche)
+            next_midnight_sync = datetime.combine(now.date(), datetime_time(0, 0))
+            
+            # Calcular la fecha de la próxima sincronización de mediodía y medianoche
+            if now > next_noon_sync:
+                # Si ya pasó mediodía, el próximo es a medianoche
+                next_sync_time = next_midnight_sync.replace(day=now.day + 1)
+            elif now > next_midnight_sync:
+                # Si ya pasó medianoche, el próximo es a mediodía
+                next_sync_time = next_noon_sync
+            else:
+                # Si el programa se inicia antes de medianoche
+                next_sync_time = next_midnight_sync
 
-            # Si el servicio se inicia a las 00:00:01, forzar la sincronización en ~5 segundos.
-            time_to_wait = (next_midnight - now).total_seconds()
-            if time_to_wait < 60: # Si estamos cerca de medianoche
+            time_to_wait = (next_sync_time - now).total_seconds()
+
+            # Si el servicio se inicia muy cerca de una hora de sincronización,
+            # forzar la ejecución en unos segundos.
+            if time_to_wait < 60:
                 time_to_wait = 5
 
             if not self.is_installer_mode:
-                print(f"La próxima sincronización será en {int(time_to_wait)} segundos (a la medianoche).")
+                print(f"Próxima sincronización programada para las {next_sync_time.strftime('%H:%M:%S')}. Esperando {int(time_to_wait)} segundos.")
             
-            # Esperar, o salir si el evento de cierre se activa
+            # Esperar hasta la próxima sincronización o hasta que el servicio se detenga
             self.shutdown_event.wait(timeout=time_to_wait)
             
             if self.shutdown_event.is_set():
